@@ -5,6 +5,7 @@ const path         = require('path');
 const crypto       = require('crypto');
 const bcrypt       = require('bcryptjs');
 const cookieParser = require('cookie-parser');
+const axios        = require('axios');
 const { Pool }     = require('pg');
 
 const app = express();
@@ -42,25 +43,31 @@ async function initDB() {
         last_login_at TIMESTAMPTZ
       )
     `);
+    await pool.query(`ALTER TABLE time_users ADD COLUMN IF NOT EXISTS is_manager BOOLEAN DEFAULT FALSE`);
+    // Clocked hours mirrored from ServiceTitan. ST owns them; we never write back.
+    // raw is kept so a field we mis-mapped can be re-parsed without re-syncing.
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS time_entries (
-        id          SERIAL PRIMARY KEY,
-        username    TEXT NOT NULL,
-        person_name TEXT NOT NULL,
-        clock_in    TIMESTAMPTZ NOT NULL,
-        clock_out   TIMESTAMPTZ,
-        source      TEXT,
-        note        TEXT,
-        job_number  TEXT,
-        job_id      TEXT,
-        created_at  TIMESTAMPTZ DEFAULT now(),
-        edited_by   TEXT,
-        edited_at   TIMESTAMPTZ
+      CREATE TABLE IF NOT EXISTS time_st_shifts (
+        st_id          BIGINT PRIMARY KEY,
+        st_employee_id BIGINT,
+        person_name    TEXT,
+        started_at     TIMESTAMPTZ,
+        ended_at       TIMESTAMPTZ,
+        minutes        INTEGER,
+        timesheet_code TEXT,
+        raw            JSONB,
+        synced_at      TIMESTAMPTZ DEFAULT now()
       )
     `);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_time_entries_user_in ON time_entries(username, clock_in)`);
-    // Only one session may be open per person at a time.
-    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_time_entries_one_open ON time_entries(username) WHERE clock_out IS NULL`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_st_shifts_person_start ON time_st_shifts(person_name, started_at)`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS time_sync_state (
+        key          TEXT PRIMARY KEY,
+        cursor       TIMESTAMPTZ,
+        last_run_at  TIMESTAMPTZ,
+        last_error   TEXT
+      )
+    `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS time_audit_log (
         id        SERIAL PRIMARY KEY,
@@ -73,7 +80,7 @@ async function initDB() {
         at        TIMESTAMPTZ DEFAULT now()
       )
     `);
-    console.log('DB: time_users, time_entries, time_audit_log ready');
+    console.log('DB: time_users, time_st_shifts, time_sync_state, time_audit_log ready');
   } catch (e) {
     console.error('DB init error:', e.message);
   }
@@ -133,6 +140,10 @@ function namesMatch(a, b) {
   const aw = a.split(/\s+/), bw = b.split(/\s+/);
   return aw[0] === bw[0] && aw[aw.length - 1] === bw[bw.length - 1];
 }
+
+// Manager access is re-applied from here on every sign-in, so this list stays the
+// single place it is decided.
+const MANAGERS = new Set(['johnacr']);
 
 function resolveUsername(input) {
   const raw = (input || '').trim();
@@ -239,16 +250,19 @@ app.post('/api/auth/login', async (req, res) => {
     if (!rows.length) {
       const hash = await bcrypt.hash(pin, 10);
       await pool.query(
-        `INSERT INTO time_users (username, person_name, pin_hash, last_login_at)
-         VALUES ($1, $2, $3, now())
+        `INSERT INTO time_users (username, person_name, pin_hash, last_login_at, is_manager)
+         VALUES ($1, $2, $3, now(), $4)
          ON CONFLICT (username) DO NOTHING`,
-        [username, name, hash]
+        [username, name, hash, MANAGERS.has(username)]
       );
       await audit('user', null, 'pin_set', null, { username, person_name: name }, name);
     } else {
       const ok = await bcrypt.compare(pin, rows[0].pin_hash);
       if (!ok) return res.status(401).json({ error: 'Wrong PIN' });
-      await pool.query('UPDATE time_users SET last_login_at = now() WHERE username = $1', [username]);
+      await pool.query(
+        'UPDATE time_users SET last_login_at = now(), is_manager = $2 WHERE username = $1',
+        [username, MANAGERS.has(username)]
+      );
     }
 
     setSessionCookie(req, res, username);
@@ -263,7 +277,10 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/me', requireAuth, (req, res) => res.json(req.user));
+app.get('/api/me', requireAuth, async (req, res) => {
+  const { rows } = await pool.query('SELECT is_manager FROM time_users WHERE username = $1', [req.user.username]);
+  res.json({ ...req.user, isManager: !!rows[0]?.is_manager });
+});
 
 // ─── The tracker's activity feed (read-only) ──────────────────────────────────
 
@@ -288,8 +305,29 @@ async function getMaster() {
 
 const METRICS = ['callsIn', 'callsOut', 'jobsCreated', 'jobsDispatched', 'estSent', 'audits', 'invoices'];
 
-async function activityFor(personName, date) {
-  const { blob, cachedAt } = await getMaster();
+// Everything a day needs that is the same for all 22 people, fetched once. Without
+// this a manager week view would fire 300+ queries to answer one screen.
+async function dayContext(date) {
+  const [{ blob, cachedAt }, audits, invoices] = await Promise.all([
+    getMaster(),
+    // Audits and invoices are daily counts only in the blob, so their hourly detail
+    // comes straight from the source tables.
+    pool.query(
+      `SELECT audited_by AS person, audited_at AS at, job_id
+         FROM invoice_audit_tracker
+        WHERE audited_by IS NOT NULL
+          AND (audited_at AT TIME ZONE 'America/Phoenix')::date = $1::date`, [date]),
+    pool.query(
+      `SELECT invoiced_by AS person, invoiced_at AS at, job_id
+         FROM invoice_tracker
+        WHERE invoiced_by IS NOT NULL
+          AND (invoiced_at AT TIME ZONE 'America/Phoenix')::date = $1::date`, [date])
+  ]);
+  return { date, blob, cachedAt, audits: audits.rows, invoices: invoices.rows };
+}
+
+function activityFor(personName, date, ctx) {
+  const { blob, cachedAt } = ctx;
   const row = (blob?.data || []).find(r => r.name && r.name !== 'TOTAL' && namesMatch(r.name, personName));
 
   const events = [];
@@ -314,23 +352,9 @@ async function activityFor(personName, date) {
     (row.estSentDetails || []).forEach(e => push('estSent', e.sent_at, e.estimate_id ? `Estimate ${e.estimate_id}` : null));
   }
 
-  // Audits and invoices are daily counts only in the blob, so their hourly detail
-  // comes straight from the source tables.
-  const [audits, invoices] = await Promise.all([
-    pool.query(
-      `SELECT audited_by AS person, audited_at AS at, job_id
-         FROM invoice_audit_tracker
-        WHERE audited_by IS NOT NULL
-          AND (audited_at AT TIME ZONE 'America/Phoenix')::date = $1::date`, [date]),
-    pool.query(
-      `SELECT invoiced_by AS person, invoiced_at AS at, job_id
-         FROM invoice_tracker
-        WHERE invoiced_by IS NOT NULL
-          AND (invoiced_at AT TIME ZONE 'America/Phoenix')::date = $1::date`, [date])
-  ]);
-  audits.rows.filter(r => namesMatch(r.person, personName))
+  ctx.audits.filter(r => namesMatch(r.person, personName))
     .forEach(r => push('audits', r.at, r.job_id ? `Job ${r.job_id}` : null));
-  invoices.rows.filter(r => namesMatch(r.person, personName))
+  ctx.invoices.filter(r => namesMatch(r.person, personName))
     .forEach(r => push('invoices', r.at, r.job_id ? `Job ${r.job_id}` : null));
 
   const hours = Array.from({ length: 24 }, (_, h) => {
@@ -361,83 +385,171 @@ app.get('/api/time/activity', requireAuth, async (req, res) => {
     return res.status(403).json({ error: 'You can only view your own activity' });
   }
   try {
-    res.json(await activityFor(req.user.name, date));
+    res.json(activityFor(req.user.name, date, await dayContext(date)));
   } catch (e) {
     console.error('[ACTIVITY]', e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
-// ─── Clock ────────────────────────────────────────────────────────────────────
+// ─── ServiceTitan — clocked hours (read-only) ─────────────────────────────────
+//
+// The office team punches in ServiceTitan (Payroll → Timesheets). This app mirrors
+// those punches into time_st_shifts and never creates, edits, or deletes ST time.
 
-const isMobile = req => /Mobile|Android|iPhone|iPad/i.test(req.headers['user-agent'] || '');
+const stReady = () => !!(process.env.ST_CLIENT_ID && process.env.ST_CLIENT_SECRET && process.env.ST_TENANT_ID);
+const tid = () => process.env.ST_TENANT_ID;
 
-async function openEntry(username) {
-  const { rows } = await pool.query(
-    'SELECT * FROM time_entries WHERE username = $1 AND clock_out IS NULL ORDER BY clock_in DESC LIMIT 1',
-    [username]
+let stToken = { token: null, expiresAt: 0 };
+
+async function getToken() {
+  if (stToken.token && Date.now() < stToken.expiresAt) return stToken.token;
+  const res = await axios.post(
+    process.env.ST_AUTH_URL,
+    `grant_type=client_credentials&client_id=${process.env.ST_CLIENT_ID}&client_secret=${process.env.ST_CLIENT_SECRET}`,
+    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
   );
-  return rows[0] || null;
+  stToken = { token: res.data.access_token, expiresAt: Date.now() + (res.data.expires_in - 60) * 1000 };
+  return stToken.token;
 }
 
-async function minutesOn(username, date) {
-  const { rows } = await pool.query(
-    `SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (COALESCE(clock_out, now()) - clock_in))), 0) / 60 AS mins
-       FROM time_entries
-      WHERE username = $1 AND (clock_in AT TIME ZONE 'America/Phoenix')::date = $2::date`,
-    [username, date]
-  );
-  return Math.round(Number(rows[0]?.mins || 0));
-}
-
-app.post('/api/time/clock-in', requireAuth, async (req, res) => {
-  if (!pool) return res.status(503).json({ error: 'No database connection' });
+// ST rate-limits hard: probing tripped 429 even at 1.5s spacing. It tells us how
+// long to wait, so honour that rather than guessing.
+async function stGet(endpoint, attempt = 0) {
+  const token = await getToken();
   try {
-    if (await openEntry(req.user.username)) {
-      return res.status(409).json({ error: 'You are already clocked in' });
+    const res = await axios.get(`${process.env.ST_API_URL}${endpoint}`, {
+      headers: { Authorization: `Bearer ${token}`, 'ST-App-Key': process.env.ST_APP_KEY }
+    });
+    return res.data;
+  } catch (e) {
+    if (e.response?.status === 429 && attempt < 5) {
+      const secs = Number(/again in (\d+)/.exec(e.response.data?.title || '')?.[1] || attempt + 1);
+      await new Promise(r => setTimeout(r, (secs + 1) * 1000));
+      return stGet(endpoint, attempt + 1);
     }
-    const { rows } = await pool.query(
-      `INSERT INTO time_entries (username, person_name, clock_in, source)
-       VALUES ($1, $2, now(), $3) RETURNING *`,
-      [req.user.username, req.user.name, isMobile(req) ? 'mobile' : 'web']
-    );
-    await audit('entry', rows[0].id, 'clock_in', null, rows[0], req.user.name);
-    res.json(rows[0]);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+    throw e;
   }
-});
+}
 
-app.post('/api/time/clock-out', requireAuth, async (req, res) => {
-  if (!pool) return res.status(503).json({ error: 'No database connection' });
+async function getAllPages(endpoint) {
+  let page = 1, all = [], hasMore = true;
+  while (hasMore) {
+    const data = await stGet(`${endpoint}&page=${page}`);
+    const items = data.data || [];
+    all = all.concat(items);
+    hasMore = data.hasMore && items.length > 0;
+    page++;
+    if (page > 50) break;
+  }
+  return all;
+}
+
+let employeeMapCache = { data: null, at: 0 };
+const EMP_TTL = 3600 * 1000;
+
+async function getEmployeeMap() {
+  if (employeeMapCache.data && Date.now() - employeeMapCache.at < EMP_TTL) return employeeMapCache.data;
+  const map = {};
+  (await getAllPages(`/settings/v2/tenant/${tid()}/employees?pageSize=200&active=True`))
+    .forEach(e => { if (e.id && e.name) map[e.id] = e.name; });
+  employeeMapCache = { data: map, at: Date.now() };
+  return map;
+}
+
+// Field names on a non-job timesheet are unconfirmed until the payroll scope is
+// granted, so try the plausible spellings and shout if none of them land. The raw
+// record is stored either way, so a wrong guess is re-parsable without re-syncing.
+const START_KEYS = ['startedOn', 'startTime', 'start', 'clockIn', 'startsOn'];
+const END_KEYS   = ['endedOn', 'endTime', 'end', 'clockOut', 'endsOn'];
+let warnedShape = false;
+
+function pick(row, keys) {
+  for (const k of keys) if (row[k]) return row[k];
+  return null;
+}
+
+function shiftTimes(row) {
+  const started = pick(row, START_KEYS);
+  const ended   = pick(row, END_KEYS);
+  if (!started && !warnedShape) {
+    warnedShape = true;
+    console.error('[ST SYNC] no known start field on a timesheet — keys were:', Object.keys(row).join(', '));
+  }
+  return { started, ended };
+}
+
+const SYNC_KEY = 'st_non_job_timesheets';
+const SYNC_MINUTES = 10;
+const BACKFILL_DAYS = 60;
+
+async function syncShifts() {
+  if (!pool || !stReady()) return;
+  const runStart = new Date();
+  const { rows } = await pool.query('SELECT cursor FROM time_sync_state WHERE key = $1', [SYNC_KEY]);
+  const since = rows[0]?.cursor || new Date(Date.now() - BACKFILL_DAYS * 86400000);
+
   try {
-    const before = await openEntry(req.user.username);
-    if (!before) return res.status(409).json({ error: 'You are not clocked in' });
-
-    const note = (req.body?.note || '').trim() || null;
-    const jobNumber = (req.body?.jobNumber || '').trim() || null;
-    const { rows } = await pool.query(
-      `UPDATE time_entries SET clock_out = now(), note = $2, job_number = $3
-        WHERE id = $1 RETURNING *`,
-      [before.id, note, jobNumber]
+    const emp = await getEmployeeMap();
+    // Only modified* filters exist here — there is no shift-date filter — so we sync
+    // by change cursor and let the display layer filter on the punch's own start.
+    const items = await getAllPages(
+      `/payroll/v2/tenant/${tid()}/non-job-timesheets?pageSize=200&employeeType=Employee` +
+      `&modifiedOnOrAfter=${since.toISOString()}`
     );
-    await audit('entry', before.id, 'clock_out', before, rows[0], req.user.name);
-    res.json(rows[0]);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
 
-app.get('/api/time/status', requireAuth, async (req, res) => {
-  if (!pool) return res.status(503).json({ error: 'No database connection' });
-  try {
-    const date = azToday();
-    const [open, mins] = await Promise.all([openEntry(req.user.username), minutesOn(req.user.username, date)]);
-    res.json({ date, open, minutesToday: mins });
+    for (const it of items) {
+      const { started, ended } = shiftTimes(it);
+      const minutes = started && ended ? Math.round((new Date(ended) - new Date(started)) / 60000) : null;
+      await pool.query(
+        `INSERT INTO time_st_shifts
+           (st_id, st_employee_id, person_name, started_at, ended_at, minutes, timesheet_code, raw, synced_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+         ON CONFLICT (st_id) DO UPDATE SET
+           st_employee_id = EXCLUDED.st_employee_id, person_name = EXCLUDED.person_name,
+           started_at = EXCLUDED.started_at, ended_at = EXCLUDED.ended_at,
+           minutes = EXCLUDED.minutes, timesheet_code = EXCLUDED.timesheet_code,
+           raw = EXCLUDED.raw, synced_at = now()`,
+        [it.id, it.employeeId, emp[it.employeeId] || null, started, ended, minutes,
+         it.timesheetCode?.name || it.activityCode?.name || null, JSON.stringify(it)]
+      );
+    }
+
+    // Overlap the cursor slightly so a punch edited mid-run is not skipped.
+    await pool.query(
+      `INSERT INTO time_sync_state (key, cursor, last_run_at, last_error)
+       VALUES ($1, $2, now(), NULL)
+       ON CONFLICT (key) DO UPDATE SET cursor = EXCLUDED.cursor, last_run_at = now(), last_error = NULL`,
+      [SYNC_KEY, new Date(runStart.getTime() - 5 * 60000)]
+    );
+    await audit('sync', null, 'st_shifts', null, { count: items.length, since }, 'system');
+    console.log(`[ST SYNC] ${items.length} timesheets since ${since.toISOString()}`);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    const msg = e.response ? `${e.response.status} ${e.response.data?.title || ''}`.trim() : e.message;
+    await pool.query(
+      `INSERT INTO time_sync_state (key, cursor, last_run_at, last_error)
+       VALUES ($1, NULL, now(), $2)
+       ON CONFLICT (key) DO UPDATE SET last_run_at = now(), last_error = EXCLUDED.last_error`,
+      [SYNC_KEY, msg]
+    );
+    console.error('[ST SYNC]', msg);
   }
-});
+}
+
+// Every punch that starts on the given Arizona day, all people. Callers filter by
+// name with namesMatch(), since ST names and login names differ.
+async function shiftsOnDate(date) {
+  const { rows } = await pool.query(
+    `SELECT * FROM time_st_shifts
+      WHERE (started_at AT TIME ZONE 'America/Phoenix')::date = $1::date
+      ORDER BY started_at`,
+    [date]
+  );
+  return rows;
+}
+
+const shiftsOf = (rows, personName) => rows.filter(r => namesMatch(r.person_name, personName));
+const minutesOf = shifts => shifts.reduce((n, s) => n + (s.minutes || 0), 0);
 
 app.get('/api/time/day', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'No database connection' });
@@ -446,21 +558,99 @@ app.get('/api/time/day', requireAuth, async (req, res) => {
     return res.status(403).json({ error: 'You can only view your own day' });
   }
   try {
-    const [sessions, activity, mins] = await Promise.all([
-      pool.query(
-        `SELECT * FROM time_entries
-          WHERE username = $1 AND (clock_in AT TIME ZONE 'America/Phoenix')::date = $2::date
-          ORDER BY clock_in`,
-        [req.user.username, date]
-      ),
-      activityFor(req.user.name, date),
-      minutesOn(req.user.username, date)
-    ]);
-    res.json({ date, person: req.user.name, sessions: sessions.rows, minutesTotal: mins, activity });
+    const [all, ctx] = await Promise.all([shiftsOnDate(date), dayContext(date)]);
+    const shifts = shiftsOf(all, req.user.name);
+    res.json({
+      date, person: req.user.name, shifts,
+      minutesTotal: minutesOf(shifts),
+      activity: activityFor(req.user.name, date, ctx)
+    });
   } catch (e) {
     console.error('[DAY]', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// ─── Manager views ────────────────────────────────────────────────────────────
+
+async function requireManager(req, res, next) {
+  const { rows } = await pool.query('SELECT is_manager FROM time_users WHERE username = $1', [req.user.username]);
+  if (!rows[0]?.is_manager) return res.status(403).json({ error: 'Managers only' });
+  next();
+}
+
+const ROSTER = Object.values(USERNAME_TO_NAME);
+
+app.get('/api/manager/day', requireAuth, requireManager, async (req, res) => {
+  const date = req.query.date || azToday();
+  try {
+    const [all, ctx] = await Promise.all([shiftsOnDate(date), dayContext(date)]);
+    const people = ROSTER.map(name => {
+      const shifts = shiftsOf(all, name);
+      const activity = activityFor(name, date, ctx);
+      return {
+        person: name,
+        shifts,
+        minutes: minutesOf(shifts),
+        openShift: shifts.some(s => !s.ended_at),
+        activity: activity.totals,
+        hours: activity.hours.map(h => ({ hour: h.hour, total: h.total }))
+      };
+    }).sort((a, b) => a.person.localeCompare(b.person));
+    res.json({ date, cachedAt: ctx.cachedAt, people });
+  } catch (e) {
+    console.error('[MGR DAY]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Weeks start Sunday (John, 2026-08-12).
+function weekDates(start) {
+  const d = new Date(`${start}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - d.getUTCDay());
+  return Array.from({ length: 7 }, (_, i) => {
+    const x = new Date(d);
+    x.setUTCDate(x.getUTCDate() + i);
+    return x.toISOString().split('T')[0];
+  });
+}
+
+app.get('/api/manager/week', requireAuth, requireManager, async (req, res) => {
+  const dates = weekDates(req.query.start || azToday());
+  try {
+    const days = [];
+    for (const date of dates) {
+      const [all, ctx] = await Promise.all([shiftsOnDate(date), dayContext(date)]);
+      days.push({ date, all, ctx });
+    }
+    const people = ROSTER.map(name => {
+      const cells = days.map(({ date, all, ctx }) => {
+        const shifts = shiftsOf(all, name);
+        const totals = activityFor(name, date, ctx).totals;
+        return {
+          date,
+          minutes: minutesOf(shifts),
+          activity: Object.values(totals).reduce((a, b) => a + b, 0),
+          openShift: shifts.some(s => !s.ended_at)
+        };
+      });
+      return {
+        person: name,
+        cells,
+        minutes: cells.reduce((n, c) => n + c.minutes, 0),
+        activity: cells.reduce((n, c) => n + c.activity, 0)
+      };
+    }).sort((a, b) => a.person.localeCompare(b.person));
+    res.json({ start: dates[0], end: dates[6], dates, people });
+  } catch (e) {
+    console.error('[MGR WEEK]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/manager/sync-state', requireAuth, requireManager, async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM time_sync_state WHERE key = $1', [SYNC_KEY]);
+  res.json(rows[0] || { key: SYNC_KEY, cursor: null, last_run_at: null, last_error: 'never run' });
 });
 
 // A real 404 for unknown API routes, so status codes stay meaningful.
@@ -478,4 +668,7 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log(`AC Rangers Timeclock running on http://localhost:${PORT}`);
   await initDB();
+  if (!stReady()) return console.warn('No ServiceTitan credentials — clocked hours will not sync');
+  await syncShifts();
+  setInterval(syncShifts, SYNC_MINUTES * 60000);
 });

@@ -79,16 +79,6 @@ button { font-family: inherit; }
   font-size: 14px; font-weight: 600; cursor: pointer; padding: 4px 8px;
 }
 
-.big {
-  width: 100%; max-width: 320px; padding: 28px;
-  border: 0; border-radius: 18px;
-  background: var(--green); color: #fff;
-  font-size: 22px; font-weight: 700; letter-spacing: .3px;
-  cursor: pointer; box-shadow: var(--shadow);
-}
-.big.out { background: var(--red); }
-.big:disabled { opacity: .5; }
-
 /* ─── Login ─────────────────────────────────────────────────────────────── */
 
 #login { display: flex; align-items: center; justify-content: center; padding: 24px; }
@@ -117,16 +107,6 @@ select, input, textarea {
 .hint  { font-size: 12px; color: var(--text3); margin-top: 8px; line-height: 1.5; }
 .error { font-size: 13px; color: var(--red); margin-top: 12px; }
 
-/* ─── Clock ─────────────────────────────────────────────────────────────── */
-
-.clock-body {
-  display: flex; flex-direction: column; align-items: center;
-  gap: 10px; padding: 56px 24px;
-}
-.status-label { font-size: 14px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: .6px; }
-.timer { font-size: 52px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.today { font-size: 14px; color: var(--text2); margin-bottom: 28px; }
-
 /* ─── My Day ────────────────────────────────────────────────────────────── */
 
 .day-body { padding: 16px; }
@@ -137,8 +117,51 @@ select, input, textarea {
   border-radius: 10px; padding: 12px 14px; font-size: 14px;
 }
 .session .range { font-weight: 600; }
-.session .note  { color: var(--text2); font-size: 13px; margin-top: 4px; line-height: 1.5; }
 .session .job   { color: var(--accent); font-size: 12px; font-weight: 600; margin-top: 4px; }
+
+/* ─── Team ──────────────────────────────────────────────────────────────── */
+
+.team-body { padding: 16px; }
+
+.seg { display: flex; gap: 6px; padding: 12px 16px 0; }
+.seg button {
+  flex: 1; padding: 9px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); color: var(--text2);
+  font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer;
+}
+.seg button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.banner {
+  background: color-mix(in srgb, var(--red) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--red) 40%, transparent);
+  border-radius: 10px; padding: 10px 12px; margin-bottom: 14px;
+  font-size: 13px; color: var(--text1); line-height: 1.5;
+}
+
+/* The grid is wider than a phone; it scrolls itself so the page never does. */
+.grid-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+.grid { border-collapse: collapse; font-size: 13px; width: 100%; }
+.grid th, .grid td {
+  border: 1px solid var(--border); padding: 6px 8px;
+  text-align: center; white-space: nowrap;
+}
+.grid thead th { background: var(--surface); color: var(--text3); font-size: 11px; font-weight: 600; }
+.grid .who {
+  position: sticky; left: 0; z-index: 1;
+  background: var(--surface); text-align: left; font-weight: 600; min-width: 140px;
+}
+.grid .num  { font-variant-numeric: tabular-nums; color: var(--text2); }
+.grid .cell { min-width: 30px; color: var(--text2); font-variant-numeric: tabular-nums; }
+
+.grid .cell.on     { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text1); }
+.grid .cell.off    { color: var(--text3); }
+/* Activity with no shift under it — a missed punch, not a performance signal. */
+.grid .cell.orphan { background: color-mix(in srgb, var(--red) 14%, transparent); }
+
+.grid.week .cell { min-width: 76px; }
+.grid.week .cell .sub { display: block; font-size: 11px; color: var(--text3); }
+.warn { color: var(--red); font-size: 16px; line-height: 1; margin-left: 4px; }
 
 .hours { display: flex; flex-direction: column; gap: 6px; }
 .hour {

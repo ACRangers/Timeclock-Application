@@ -2,11 +2,18 @@
 
 ## What this is
 
-A **clock-in / clock-out app** for the AC Rangers **office team** (~22 people — CSRs,
-dispatch, estimating). People clock in from a phone browser or desktop, and for each hour the
-app **shows what they already did** (pulled automatically from the HVAC Tracker's Dashboard
-data) and lets them **add anything the system couldn't see**. Managers see totals by day/week,
-approve them, and export.
+A **timesheet viewer** for the AC Rangers **office team** (~22 people — CSRs, dispatch,
+estimating). **Nobody clocks in here** — the team already punches in ServiceTitan, and this
+app reads those hours. Against each hour it **shows what they already did** (pulled
+automatically from the HVAC Tracker's Dashboard data). Managers see a day and week grid per
+person, laying hours and activity side by side.
+
+Two sources, neither of them us:
+
+```
+ServiceTitan  Payroll → Timesheets ──►  hours    (time_st_shifts, synced every 10 min)
+HVAC Tracker  scoreboard_cache     ──►  activity (read live, never written)
+```
 
 **Read `TIMECLOCK-APP-PLAN.md` first — it is the spec.** It documents where every number comes
 from and what to build in what order.
@@ -57,6 +64,15 @@ dispatch and billing data. Tables this app **reads**: `scoreboard_cache`, `track
   This exact bug hid a broken feature in the tracker for a full day.
 - **New DDL goes at the END of `initDB()`**, using `CREATE TABLE IF NOT EXISTS` /
   `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
+- **ServiceTitan's `non-job-timesheets` has no shift-date filter.** Its only date params are
+  `created*` / `modified*`. Punches *created* on a day are not the punches *worked* that day,
+  and filtering that way silently drops anything edited later. Sync on the modified cursor,
+  store everything, filter by the punch's own `started_at` when displaying.
+- **ST rate-limits hard** — 429 even at ~1.5s spacing. `stGet()` honours the "try again in N
+  seconds" hint. Never call ST from a request handler; the timer owns it.
+- **Zero hours is ambiguous.** A missing scope gives `403 Scope validation failed`, which
+  looks exactly like nobody worked. The error lands in `time_sync_state.last_error` and the
+  Team screen banners it — keep that link intact if you touch the sync.
 - **The activity feed is only as fresh as the tracker.** The tracker refreshes
   `scoreboard_cache` every 10 minutes and owns that row — we never write it, so the current
   hour can lag by that much. The UI says when it was last updated.

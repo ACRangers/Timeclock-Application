@@ -30,23 +30,12 @@
     </div>
   </section>
 
-  <!-- Clock -->
-  <section id="clock" class="screen" hidden>
-    <header class="bar">
-      <span id="clock-who"></span>
-      <button id="signout" class="link">Sign out</button>
-    </header>
-
-    <div class="clock-body">
-      <p class="status-label" id="clock-status">Not clocked in</p>
-      <p class="timer" id="clock-timer">—</p>
-      <p class="today" id="clock-today"></p>
-      <button id="clock-btn" class="big">Clock In</button>
-    </div>
-  </section>
-
   <!-- My Day -->
   <section id="day" class="screen" hidden>
+    <header class="bar">
+      <span id="day-who"></span>
+      <button id="signout" class="link">Sign out</button>
+    </header>
     <header class="bar">
       <button id="day-prev" class="link">‹</button>
       <span id="day-date"></span>
@@ -64,24 +53,32 @@
     </div>
   </section>
 
-  <!-- Clock-out -->
-  <div id="out-modal" class="overlay" hidden>
-    <div class="modal">
-      <h2>What did you work on?</h2>
-      <textarea id="out-note" rows="4" placeholder="Anything the system wouldn't have recorded"></textarea>
-      <label for="out-job">Job number <span class="opt">(optional)</span></label>
-      <input id="out-job" type="text" inputmode="numeric" placeholder="e.g. 48213">
-      <p class="error" id="out-error" hidden></p>
-      <div class="modal-actions">
-        <button id="out-cancel" class="ghost">Cancel</button>
-        <button id="out-confirm" class="primary">Clock Out</button>
-      </div>
+  <!-- Team (managers only) -->
+  <section id="team" class="screen" hidden>
+    <header class="bar">
+      <button id="team-prev" class="link">‹</button>
+      <span id="team-range"></span>
+      <button id="team-next" class="link">›</button>
+    </header>
+    <div class="seg">
+      <button id="seg-day" class="active">Day</button>
+      <button id="seg-week">Week</button>
     </div>
-  </div>
+
+    <div class="team-body">
+      <p id="team-banner" class="banner" hidden></p>
+      <div id="team-grid" class="grid-wrap"></div>
+      <p class="framing">
+        Hours come from ServiceTitan. Activity is what the tracker happened to see — a quiet
+        hour is not an idle one, so read it as context, never as a score.
+      </p>
+      <p class="stamp" id="team-stamp"></p>
+    </div>
+  </section>
 
   <nav id="tabs" class="tabs" hidden>
-    <button data-view="clock" class="active">Clock</button>
-    <button data-view="day">My Day</button>
+    <button data-view="day" class="active">My Day</button>
+    <button data-view="team" id="tab-team" hidden>Team</button>
   </nav>
 
   <script src="app.js"></script>

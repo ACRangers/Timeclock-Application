@@ -1,7 +1,14 @@
 # Timeclock App — Design & Data Reference
 
-**Status:** Phase 1 built (clock in/out + My Day). Phases 2–5 not started.
+**Status:** Phase 2 built (ServiceTitan hours + My Day + manager day/week). Approvals,
+manual tasks, and export not started.
 **Date:** 2026-08-07, updated 2026-08-12
+
+> **⚠ 2026-08-12 — the design changed at its root.** The original spec had people clock in
+> and out **in this app**. They don't. The office team already punches in **ServiceTitan
+> (Payroll → Timesheets)**, so this app **reads** those hours and never captures them. The
+> app's own clock screen and `time_entries` table are gone. Where this document still says
+> "clock in", read it as "the punch ServiceTitan recorded".
 **Audience:** whoever builds this next (including future-Claude). Assumes no prior knowledge
 of the tracker.
 
@@ -31,7 +38,9 @@ the things done outside estimates / invoices / inbound / outbound / new work ord
 |---|---|
 | Who clocks in | **Office team only** (~22 tracker logins). Not field techs — see §6. |
 | Payroll-grade? | **Not yet.** Build accountability-first, but with a **full audit trail from day one** so it can become payroll-grade without a rewrite. |
-| How time is captured | **Sessions + hourly breakdown.** Clock in/out defines the hours; within the day, each hour shows auto-tracked activity and accepts manually added tasks. |
+| How time is captured | **Read from ServiceTitan** (Payroll → Timesheets), never entered here. ST punches define the hours; within the day, each hour shows the tracker's auto-recorded activity. *(Revised 2026-08-12 — was "clock in/out in the app".)* |
+| Manager access | `is_manager` on `time_users`, re-applied at each sign-in from the `MANAGERS` set in `server.js`. `johnacr` only, for now. |
+| Week start | **Sunday.** |
 
 ---
 
@@ -161,8 +170,34 @@ Arizona is **UTC-7, no DST**.
 | `call_history`, `call_history_hourly` | call counts by day / by hour, company-wide |
 | `login_log` | `username`, `logged_in_at` — a weak "who was here" signal, **not** a timeclock |
 
-**There is no ServiceTitan payroll or timesheet integration in this codebase** — verified.
-Field techs clock into ServiceTitan's own time clock, which this app does not read.
+**The tracker has no ServiceTitan payroll or timesheet integration** — still true of the
+tracker. **The timeclock added one on 2026-08-12**; see §2.9.
+
+### 2.9 ServiceTitan timesheets — where clocked hours come from
+
+The office team punches in ServiceTitan, and this app mirrors those punches into
+`time_st_shifts`. It never writes ST time.
+
+| | |
+|---|---|
+| Endpoint | `GET /payroll/v2/tenant/{tid}/non-job-timesheets?employeeType=Employee` |
+| Scope | **`tn.prl.nonjobtimesheets:r`** — plus `tn.prl.timesheetcodes:r` to label a punch |
+| Employee join | ST employee id → name via `/settings/v2/.../employees`, then `namesMatch()` |
+| Cadence | on boot, then every 10 minutes |
+
+**Two traps, both hit for real while building:**
+
+- **There is no shift-date filter.** The only date params are `createdOnOrAfter` /
+  `createdBefore` / `modifiedOnOrAfter` / `modifiedBefore`. Punches *created* on a day are not
+  the punches *worked* that day, and filtering that way silently drops anything edited later.
+  Sync on a **modified cursor**, keep everything, and filter on the punch's own start when
+  displaying.
+- **Rate limits bite.** Probing tripped HTTP 429 even at ~1.5s spacing. `stGet()` reads the
+  "try again in N seconds" hint and backs off; the sync is on a timer, never per request.
+
+**If hours read zero everywhere, check the scope first.** A missing scope returns
+`403 Scope validation failed`, which the sync records in `time_sync_state.last_error` and the
+Team screen shows as a banner — zeros must never be mistaken for a day off.
 
 ---
 
@@ -314,10 +349,12 @@ for, and only for work the tracker genuinely cannot see.
 ### 3.2 Tables
 
 ```sql
-time_users      username (PK), person_name, pin_hash, created_at, last_login_at
+time_users      username (PK), person_name, pin_hash, created_at, last_login_at, is_manager
 
-time_entries    id, username, person_name, clock_in, clock_out, source ('web'|'mobile'),
-                note, job_number, job_id, created_at, edited_by, edited_at
+time_st_shifts  st_id (PK), st_employee_id, person_name, started_at, ended_at,
+                minutes, timesheet_code, raw JSONB, synced_at      -- mirrored from ST
+
+time_sync_state key (PK), cursor, last_run_at, last_error
 
 time_tasks      id, username, person_name, work_date, hour (0-23),
                 description, job_number, job_id, minutes, created_at
@@ -343,12 +380,11 @@ Per house style: add DDL **at the end of `initDB()`**, using `CREATE TABLE IF NO
 | POST | `/api/auth/login` | first call sets the PIN, later calls check it; issues the cookie |
 | POST | `/api/auth/logout` | clear the cookie |
 | GET | `/api/me` | current session's person |
-| POST | `/api/time/clock-in` | start a session |
-| POST | `/api/time/clock-out` | end it; `{note, jobNumber, jobId}` |
-| GET | `/api/time/status` | am I clocked in? current session + today's total |
-| GET | `/api/time/day?person=&date=` | sessions + hourly auto activity + manual tasks |
-| POST/PATCH/DELETE | `/api/time/tasks` | manual per-hour entries |
-| GET | `/api/time/summary?from=&to=&person=` | totals by day/week for the manager grid |
+| GET | `/api/time/day?person=&date=` | my ST shifts + hourly auto activity |
+| GET | `/api/manager/day?date=` | **manager** — every person's shifts, minutes, hourly activity |
+| GET | `/api/manager/week?start=` | **manager** — Sunday-start grid, 7 cells + totals per person |
+| GET | `/api/manager/sync-state` | **manager** — last sync run and error, drives the banner |
+| POST/PATCH/DELETE | `/api/time/tasks` | manual per-hour entries *(not built)* |
 | POST | `/api/time/approve` | approve a day or a week |
 | GET | `/api/time/export?from=&to=&format=csv` | weekly detail + summary |
 
@@ -451,5 +487,6 @@ knowing:
 - **Field techs.** They clock into ServiceTitan already, and the Dashboard does not track them
   the way it tracks office staff — their work is appointments, not calls and estimates.
   Including them would mean a second, different data source and effectively a second app.
-- **Reading or writing ServiceTitan payroll/timesheets.** No integration exists today.
+- **Writing ServiceTitan payroll/timesheets.** Reading them is now the core of the app (§2.9);
+  writing back is not, and should stay that way — ST is the system of record for hours.
 - **GPS / location capture.** Not asked for; adds meaningful privacy and legal weight.
