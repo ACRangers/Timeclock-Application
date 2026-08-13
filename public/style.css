@@ -159,7 +159,9 @@ select, input, textarea {
   border-radius: 5px; padding: 1px 6px; font-size: 12px; font-weight: 600;
   font-variant-numeric: tabular-nums; font-style: normal;
 }
-.hour .h .pts-tag { display: inline-block; margin-top: 4px; font-size: 11px; }
+/* Block, not inline-block: the tag then sits under the hour every time instead of
+   only when the number is wide enough to wrap. */
+.hour .h .pts-tag { display: block; width: fit-content; margin-top: 4px; font-size: 11px; }
 
 /* Overtime, in the same yellow as the block past the eight-hour mark. */
 .ot-tag {
