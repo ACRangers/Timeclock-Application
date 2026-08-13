@@ -79,6 +79,9 @@ button { font-family: inherit; }
   font-size: 14px; font-weight: 600; cursor: pointer; padding: 4px 8px;
 }
 
+/* Holds the middle of a bar open so a lone button stays on its own side. */
+.spacer { flex: 1; }
+
 /* ─── Login ─────────────────────────────────────────────────────────────── */
 
 #login { display: flex; align-items: center; justify-content: center; padding: 24px; }
@@ -225,7 +228,13 @@ select, input, textarea {
 
 .day-body { padding: 16px; }
 
-.total { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+/* Name and the day's totals read as one line, wrapping on a narrow screen. */
+.person-head {
+  display: flex; align-items: baseline; flex-wrap: wrap;
+  gap: 4px 12px; margin-bottom: 12px;
+}
+.person-head h2 { font-size: 18px; }
+.total { font-size: 15px; font-weight: 600; color: var(--text2); }
 
 .section-h {
   font-size: 12px; font-weight: 600; color: var(--text3);

@@ -34,7 +34,7 @@
   <section id="day" class="screen" hidden>
     <header class="bar">
       <button id="day-back" class="link" hidden>‹ Team</button>
-      <span id="day-who"></span>
+      <span class="spacer"></span>
       <button id="signout" class="link">Sign out</button>
     </header>
     <header class="bar">
@@ -48,7 +48,10 @@
     </div>
 
     <div class="day-body">
-      <p class="total" id="day-total"></p>
+      <div class="person-head">
+        <h2 id="day-who"></h2>
+        <p class="total" id="day-total"></p>
+      </div>
       <div id="day-cal"></div>
       <h3 class="section-h">Hour by hour</h3>
       <div id="day-hours" class="hours"></div>
