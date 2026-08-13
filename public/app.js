@@ -89,6 +89,9 @@ function fmtMinutes(mins) {
   return h ? `${h}h ${m}m` : `${m}m`;
 }
 
+// Outbound calls are worth half a point, so totals land on .5 often enough to matter.
+const fmtPoints = n => (Number.isInteger(n) ? n : n.toFixed(1));
+
 // ─── Views ─────────────────────────────────────────────────────────────────
 
 function showView(name) {
@@ -343,7 +346,7 @@ async function loadDay() {
         ? await api(`/api/time/day?date=${dayDate}`)
         : await api(`/api/manager/person-day?date=${dayDate}${who}`);
       $('day-date').textContent = dayDate === azTodayStr() ? 'Today' : fmtDay(dayDate);
-      $('day-total').innerHTML = totalLine(d.minutes, overtimeOf(d.shifts), 'clocked');
+      $('day-total').innerHTML = totalLine(d.minutes, overtimeOf(d.shifts), 'clocked', d.activity.points);
       myDays = [d];
       renderCalendar($('day-cal'), [{
         key: d.date, label: fmtDay(d.date), date: d.date,
@@ -357,7 +360,8 @@ async function loadDay() {
         : await api(`/api/manager/person-week?start=${dayDate}${who}`);
       $('day-date').textContent = `${fmtDay(w.start)} – ${fmtDay(w.end)}`;
       const weekOt = w.days.reduce((n, d) => n + overtimeOf(d.shifts), 0);
-      $('day-total').innerHTML = totalLine(w.minutes, weekOt, 'clocked this week');
+      const weekPts = w.days.reduce((n, d) => n + d.activity.points, 0);
+      $('day-total').innerHTML = totalLine(w.minutes, weekOt, 'clocked this week', weekPts);
       myDays = w.days;
       renderCalendar($('day-cal'), w.days.map(d => ({
         key: d.date, label: fmtDay(d.date).split(' ')[0], sub: d.date.slice(5).replace('-', '/'),
@@ -371,9 +375,10 @@ async function loadDay() {
   }
 }
 
-const totalLine = (minutes, ot, label) =>
+const totalLine = (minutes, ot, label, points) =>
   (minutes ? `${fmtMinutes(minutes)} ${label}` : 'No ServiceTitan clock-in') +
-  (ot > 0 ? ` <span class="ot-tag">${fmtMinutes(ot)} overtime</span>` : '');
+  (ot > 0 ? ` <span class="ot-tag">${fmtMinutes(ot)} overtime</span>` : '') +
+  (points ? ` <span class="pts-tag">${fmtPoints(points)} points</span>` : '');
 
 // The hour-by-hour list under the calendar: what the tracker saw, and the note.
 function renderBreakdown(day, editable) {
@@ -402,7 +407,8 @@ function renderWeekBreakdown(week, editable) {
                   <div class="dayhead">
                     <h4>${fmtDay(d.date)}</h4>
                     <span class="mins">${d.minutes ? fmtMinutes(d.minutes) : 'no clock-in'}${
-                      ot > 0 ? ` <b class="ot-tag">${fmtMinutes(ot)} OT</b>` : ''}</span>
+                      ot > 0 ? ` <b class="ot-tag">${fmtMinutes(ot)} OT</b>` : ''}${
+                      d.activity.points ? ` <b class="pts-tag">${fmtPoints(d.activity.points)} pts</b>` : ''}</span>
                     <div class="chips">${chipsOf(d.activity.totals)}</div>
                   </div>
                   ${rows.map(h => hourRow(h, covered.has(h.hour), d.notes[h.hour], d.date, editable, true)).join('')}
@@ -421,7 +427,7 @@ function hourRow(h, clockedIn, note, date, editable, withEvents = false) {
   return `
     <div class="hour${clockedIn ? '' : ' outside'}${editable ? ' tappable' : ''}"
          data-date="${date}" data-hour="${h.hour}">
-      <div class="h">${fmtHour(h.hour)}</div>
+      <div class="h">${fmtHour(h.hour)}${h.points ? `<i class="pts-tag">${fmtPoints(h.points)}</i>` : ''}</div>
       <div class="body">
         ${clockedIn ? '' : '<div class="tag">Not clocked in</div>'}
         ${chips ? `<div class="chips">${chips}</div>` : '<div class="quiet">No tracked activity this hour.</div>'}
@@ -567,7 +573,8 @@ async function loadTeam() {
                 ${ot > 0 ? `<b class="ot-tag">+${fmtMinutes(ot)} OT</b>` : ''}
                 ${p.openShift ? '<b class="warn" title="No clock-out">•</b>' : ''}
               </span>
-              <span class="act">${acts || ''}</span>
+              <span class="act" title="${acts} tracked actions">${acts || ''}</span>
+              <span class="pts">${p.points ? `${fmtPoints(p.points)}<i>pts</i>` : ''}</span>
               <span class="chev">›</span>
             </button>`;
         }).join('')

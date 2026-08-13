@@ -87,9 +87,16 @@ dispatch and billing data. Tables this app **reads**: `scoreboard_cache`, `track
 
 **Tracked activity is not a measure of effort.** An hour with no logged actions is not an idle
 hour — it could be a meeting, training, one long difficult call, or work done directly in
-ServiceTitan. Always frame a gap as **"add what you did"**, never "you did nothing", and never
-rank or score people by activity count. A timesheet people feel surveilled by is one they
-learn to game, and then the data is worthless.
+ServiceTitan. Always frame a gap as **"add what you did"**, never "you did nothing".
+
+**Points exist anyway — John asked for them on 2026-08-13.** `POINTS` in `server.js` weights
+each metric (inbound 2, outbound 0.5, job created 2, dispatched 3, estimate 6, invoice 4,
+audit 0) and `pointsOf()` is the only place scoring happens, so a team-list total can never
+disagree with the hour it came from. Two things to keep in view when touching this: a weight
+is an instruction about what to do more of — an estimate at 6 is worth twelve outbound calls,
+and people will notice — and **audits score 0**, which is most of what Michael Molina does.
+Points are a total, never a ranking: do not sort the team by them or colour anyone red for a
+low score.
 
 **One calendar renderer, not three.** `renderCalendar()` draws a 24-hour axis with a set of
 columns; a column is a date (day/week) or a person (the team coverage board). Adding a fourth

@@ -344,6 +344,23 @@ async function getMaster() {
 
 const METRICS = ['callsIn', 'callsOut', 'jobsCreated', 'jobsDispatched', 'estSent', 'audits', 'invoices'];
 
+// Weights set by John, 2026-08-13. Scored here and only here, so a total on the team
+// list can never disagree with the hour it came from.
+//
+// audits is 0 because it was not in the list given. That is a real decision, not an
+// oversight to inherit quietly: it is most of what Michael Molina does.
+const POINTS = {
+  callsIn:        2,
+  callsOut:       0.5,
+  jobsCreated:    2,
+  jobsDispatched: 3,
+  estSent:        6,
+  audits:         0,
+  invoices:       4
+};
+
+const pointsOf = counts => METRICS.reduce((n, m) => n + (counts[m] || 0) * POINTS[m], 0);
+
 // Everything a day needs that is the same for all 22 people, fetched once. Without
 // this a manager week view would fire 300+ queries to answer one screen.
 async function dayContext(date) {
@@ -400,7 +417,13 @@ function activityFor(personName, date, ctx) {
     const evs = events.filter(e => e.hour === h).sort((a, b) => new Date(a.at) - new Date(b.at));
     const metrics = {};
     METRICS.forEach(m => { metrics[m] = evs.filter(e => e.kind === m).length; });
-    return { hour: h, total: evs.length, metrics, details: evs.map(({ kind, at, label }) => ({ kind, at, label })) };
+    return {
+      hour: h,
+      total: evs.length,
+      points: pointsOf(metrics),
+      metrics,
+      details: evs.map(({ kind, at, label }) => ({ kind, at, label }))
+    };
   });
 
   const totals = {};
@@ -412,7 +435,8 @@ function activityFor(personName, date, ctx) {
     date,
     cachedAt,
     hours,
-    totals
+    totals,
+    points: pointsOf(totals)
   };
 }
 
@@ -822,7 +846,8 @@ app.get('/api/manager/day', requireAuth, requireManager, async (req, res) => {
         openShift: d.openShift,
         notes: d.notes,
         activity: d.activity.totals,
-        hours: d.activity.hours.map(h => ({ hour: h.hour, total: h.total }))
+        points: d.activity.points,
+        hours: d.activity.hours.map(h => ({ hour: h.hour, total: h.total, points: h.points }))
       };
     }).filter(Boolean).sort((a, b) => a.person.localeCompare(b.person));
     res.json({ date, cachedAt: bundle.ctx.cachedAt, people });
