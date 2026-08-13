@@ -64,10 +64,14 @@ dispatch and billing data. Tables this app **reads**: `scoreboard_cache`, `track
   This exact bug hid a broken feature in the tracker for a full day.
 - **New DDL goes at the END of `initDB()`**, using `CREATE TABLE IF NOT EXISTS` /
   `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
-- **ServiceTitan's `non-job-timesheets` has no shift-date filter.** Its only date params are
-  `created*` / `modified*`. Punches *created* on a day are not the punches *worked* that day,
-  and filtering that way silently drops anything edited later. Sync on the modified cursor,
-  store everything, filter by the punch's own `started_at` when displaying.
+- **Office hours are `timesheets/v2/activities`, NOT `payroll/v2/non-job-timesheets`.** The
+  payroll one is the obvious-looking endpoint and holds only technician punches — the office
+  team's last entry there was 2025-01-15. Filter `employeeType === 'Employee'` client-side.
+- **ServiceTitan has no shift-date filter.** Its only date params are `created*` / `modified*`,
+  so the first load asks `createdOnOrAfter` (a punch is created at clock-in) and every sync
+  after asks `modifiedOnOrAfter` (the only axis that catches a later edit). Always set `sort`
+  to match the filter — the default id order walks from the oldest record forward and caps out
+  thousands of rows short of today.
 - **ST rate-limits hard** — 429 even at ~1.5s spacing. `stGet()` honours the "try again in N
   seconds" hint. Never call ST from a request handler; the timer owns it.
 - **Zero hours is ambiguous.** A missing scope gives `403 Scope validation failed`, which

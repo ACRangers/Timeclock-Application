@@ -180,20 +180,52 @@ The office team punches in ServiceTitan, and this app mirrors those punches into
 
 | | |
 |---|---|
-| Endpoint | `GET /payroll/v2/tenant/{tid}/non-job-timesheets?employeeType=Employee` |
-| Scope | **`tn.prl.nonjobtimesheets:r`** — plus `tn.prl.timesheetcodes:r` to label a punch |
+| Endpoint | `GET /timesheets/v2/tenant/{tid}/activities` |
+| Scope | **`tn.tms.activities:r`** — plus `tn.tms.activitytypes:r` to label a punch |
+| Which rows | `employeeType === 'Employee'` — filtered **client-side**, the endpoint has no such param |
+| Fields | `startTime` / `endTime` (a null `endTime` is an open punch) |
 | Employee join | ST employee id → name via `/settings/v2/.../employees`, then `namesMatch()` |
 | Cadence | on boot, then every 10 minutes |
 
-**Two traps, both hit for real while building:**
+**It is NOT `payroll/v2/non-job-timesheets`.** That endpoint is the obvious-looking one and it
+is wrong: as of 2026-08 it holds only technician punches, and the office team's last entry
+there was **2025-01-15**. Verified by direct probe — 0 of 27 ST office employees appear in it.
+
+**Four traps, all hit for real while building:**
 
 - **There is no shift-date filter.** The only date params are `createdOnOrAfter` /
   `createdBefore` / `modifiedOnOrAfter` / `modifiedBefore`. Punches *created* on a day are not
   the punches *worked* that day, and filtering that way silently drops anything edited later.
   Sync on a **modified cursor**, keep everything, and filter on the punch's own start when
   displaying.
+- **The first load and the steady-state sync need different queries.** The first load asks
+  `createdOnOrAfter` — a punch is created when someone clocks in, so creation date tracks the
+  shifts we want. After that the 10-minute sync asks `modifiedOnOrAfter`, the only axis that
+  catches a punch edited after the fact. Asking by modification date for the *first* load
+  instead drags in every ancient record swept up by a bulk edit: this tenant has one dated
+  **2026-07-30** dense enough that each 10,000-record pass advanced the cursor by 32 seconds.
+- **`sort` must match the filter, always.** The default paging order is by id, so a
+  cursor-driven sync walks from the oldest record forward and hits the page cap thousands of
+  rows short of today — the current week never arrives. `getAllPages()` returns `capped` so
+  the cursor parks on the last record actually seen rather than jumping past it, and the
+  cursor is floored to advance at least a second per pass so a block of records sharing one
+  `modifiedOn` cannot re-fetch itself forever.
+- **An open punch has no duration.** `endTime` is null until someone clocks out, so a naive
+  sum reads zero for everyone currently at work. `shiftMinutes()` counts elapsed time for a
+  punch open **today**; on a past day an open punch is a missed clock-out, where running the
+  clock to now would invent days of work.
 - **Rate limits bite.** Probing tripped HTTP 429 even at ~1.5s spacing. `stGet()` reads the
   "try again in N seconds" hint and backs off; the sync is on a timer, never per request.
+- **A meal break is a punch too.** `Meal` is an activity type like any other, so summing every
+  activity counts lunch as worked time. `UNPAID_CODES` excludes it from totals; the row is
+  still stored honestly.
+
+**Activity types seen in this tenant:** Working (the office clock-in), Meal, Training, Sick,
+Bereavement, Review, Waiting on Office, Driving, Hourly Pay, Temp C/O.
+
+**GPS is dropped on purpose.** Every activity carries `startCoordinate` / `endCoordinate`.
+§6 lists location capture as out of scope, so the sync strips both before storing rather than
+quietly keeping them in `raw`.
 
 **If hours read zero everywhere, check the scope first.** A missing scope returns
 `403 Scope validation failed`, which the sync records in `time_sync_state.last_error` and the

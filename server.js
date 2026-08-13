@@ -432,54 +432,58 @@ async function stGet(endpoint, attempt = 0) {
   }
 }
 
-async function getAllPages(endpoint) {
-  let page = 1, all = [], hasMore = true;
+const MAX_PAGES = 50;
+
+// `capped` says we stopped early rather than ran out — the caller has to resume from
+// where it got to, or it silently loses everything past the cap.
+async function getAllPages(endpoint, maxPages = MAX_PAGES) {
+  let page = 1, items = [], hasMore = true;
   while (hasMore) {
     const data = await stGet(`${endpoint}&page=${page}`);
-    const items = data.data || [];
-    all = all.concat(items);
-    hasMore = data.hasMore && items.length > 0;
+    const batch = data.data || [];
+    items = items.concat(batch);
+    hasMore = data.hasMore && batch.length > 0;
     page++;
-    if (page > 50) break;
+    if (page > maxPages) return { items, capped: hasMore };
   }
-  return all;
+  return { items, capped: false };
 }
 
+const LOOKUP_TTL = 3600 * 1000;
 let employeeMapCache = { data: null, at: 0 };
-const EMP_TTL = 3600 * 1000;
+let activityTypeCache = { data: null, at: 0 };
 
 async function getEmployeeMap() {
-  if (employeeMapCache.data && Date.now() - employeeMapCache.at < EMP_TTL) return employeeMapCache.data;
+  if (employeeMapCache.data && Date.now() - employeeMapCache.at < LOOKUP_TTL) return employeeMapCache.data;
   const map = {};
-  (await getAllPages(`/settings/v2/tenant/${tid()}/employees?pageSize=200&active=True`))
+  (await getAllPages(`/settings/v2/tenant/${tid()}/employees?pageSize=200&active=True`)).items
     .forEach(e => { if (e.id && e.name) map[e.id] = e.name; });
   employeeMapCache = { data: map, at: Date.now() };
   return map;
 }
 
-// Field names on a non-job timesheet are unconfirmed until the payroll scope is
-// granted, so try the plausible spellings and shout if none of them land. The raw
-// record is stored either way, so a wrong guess is re-parsable without re-syncing.
-const START_KEYS = ['startedOn', 'startTime', 'start', 'clockIn', 'startsOn'];
-const END_KEYS   = ['endedOn', 'endTime', 'end', 'clockOut', 'endsOn'];
-let warnedShape = false;
-
-function pick(row, keys) {
-  for (const k of keys) if (row[k]) return row[k];
-  return null;
+// Activity types are the punch labels: Working, Meal, Training, Sick, Driving…
+async function getActivityTypes() {
+  if (activityTypeCache.data && Date.now() - activityTypeCache.at < LOOKUP_TTL) return activityTypeCache.data;
+  const map = {};
+  (await getAllPages(`/timesheets/v2/tenant/${tid()}/activity-types?pageSize=200`)).items
+    .forEach(t => { if (t.id) map[t.id] = t.code || null; });
+  activityTypeCache = { data: map, at: Date.now() };
+  return map;
 }
 
-function shiftTimes(row) {
-  const started = pick(row, START_KEYS);
-  const ended   = pick(row, END_KEYS);
-  if (!started && !warnedShape) {
-    warnedShape = true;
-    console.error('[ST SYNC] no known start field on a timesheet — keys were:', Object.keys(row).join(', '));
-  }
-  return { started, ended };
-}
+// A meal break is clocked like any other activity but is not worked time, so it is
+// stored honestly and excluded when hours are totalled.
+const UNPAID_CODES = new Set(['Meal']);
 
-const SYNC_KEY = 'st_non_job_timesheets';
+// ServiceTitan spells a few people differently from the tracker roster, and
+// namesMatch() only bridges first+last. These are the ones it cannot reach.
+const ST_NAME_ALIASES = {
+  'Anne Frac-Roque': 'Anne Frac',
+  'Edgar Pereyra':   'Edgar Peraya'
+};
+
+const SYNC_KEY = 'st_timesheet_activities';
 const SYNC_MINUTES = 10;
 const BACKFILL_DAYS = 60;
 
@@ -487,20 +491,42 @@ async function syncShifts() {
   if (!pool || !stReady()) return;
   const runStart = new Date();
   const { rows } = await pool.query('SELECT cursor FROM time_sync_state WHERE key = $1', [SYNC_KEY]);
-  const since = rows[0]?.cursor || new Date(Date.now() - BACKFILL_DAYS * 86400000);
+  const since = rows[0]?.cursor;
 
   try {
-    const emp = await getEmployeeMap();
-    // Only modified* filters exist here — there is no shift-date filter — so we sync
-    // by change cursor and let the display layer filter on the punch's own start.
-    const items = await getAllPages(
-      `/payroll/v2/tenant/${tid()}/non-job-timesheets?pageSize=200&employeeType=Employee` +
-      `&modifiedOnOrAfter=${since.toISOString()}`
+    const [emp, types] = await Promise.all([getEmployeeMap(), getActivityTypes()]);
+    // There is no shift-date filter on this endpoint, only created*/modified*, so the
+    // two jobs need two different queries.
+    //
+    // First load asks by CREATION date: a punch is created when someone clocks in, so
+    // that tracks the shifts we actually want. Asking by modification date instead
+    // drags in every ancient record caught by a bulk edit — this tenant has one on
+    // 2026-07-30 dense enough that a modified-walk advanced 32 seconds per 10k rows.
+    //
+    // After that, modification date is the right axis: it is the only one that catches
+    // a punch edited after the fact.
+    //
+    // Either way sort matches the filter. The default id order walks from the oldest
+    // record forward, so a cap lands thousands of rows short of today.
+    const window = since
+      ? `sort=ModifiedOn&modifiedOnOrAfter=${since.toISOString()}`
+      : `sort=CreatedOn&createdOnOrAfter=${new Date(Date.now() - BACKFILL_DAYS * 86400000).toISOString()}`;
+
+    const { items: all, capped } = await getAllPages(
+      `/timesheets/v2/tenant/${tid()}/activities?pageSize=200&${window}`
     );
+    // The endpoint takes no employeeType parameter, and most of what it returns is
+    // technician job time. The office team is the Employee half.
+    const items = all.filter(a => a.employeeType === 'Employee');
 
     for (const it of items) {
-      const { started, ended } = shiftTimes(it);
-      const minutes = started && ended ? Math.round((new Date(ended) - new Date(started)) / 60000) : null;
+      const minutes = it.startTime && it.endTime
+        ? Math.round((new Date(it.endTime) - new Date(it.startTime)) / 60000)
+        : null;
+      const stName = emp[it.employeeId] || null;
+      // GPS is explicitly out of scope for this app, so the coordinates ST returns
+      // are dropped here rather than stored and forgotten about.
+      const { startCoordinate, endCoordinate, ...rest } = it;
       await pool.query(
         `INSERT INTO time_st_shifts
            (st_id, st_employee_id, person_name, started_at, ended_at, minutes, timesheet_code, raw, synced_at)
@@ -510,20 +536,33 @@ async function syncShifts() {
            started_at = EXCLUDED.started_at, ended_at = EXCLUDED.ended_at,
            minutes = EXCLUDED.minutes, timesheet_code = EXCLUDED.timesheet_code,
            raw = EXCLUDED.raw, synced_at = now()`,
-        [it.id, it.employeeId, emp[it.employeeId] || null, started, ended, minutes,
-         it.timesheetCode?.name || it.activityCode?.name || null, JSON.stringify(it)]
+        [it.id, it.employeeId, ST_NAME_ALIASES[stName] || stName, it.startTime, it.endTime || null,
+         minutes, types[it.activityTypeId] || null, JSON.stringify(rest)]
       );
     }
 
-    // Overlap the cursor slightly so a punch edited mid-run is not skipped.
+    // Caught up: overlap the cursor slightly so a punch edited mid-run is not skipped.
+    // Still catching up: resume from the last record actually seen, never past it — but
+    // always at least a second on, or a block of records sharing one modifiedOn would
+    // re-fetch itself forever.
+    const lastSeen = all.reduce((m, a) => (a.modifiedOn > m ? a.modifiedOn : m), '');
+    const cursor = capped && lastSeen
+      ? new Date(Math.max(new Date(lastSeen).getTime(), (since?.getTime() || 0) + 1000))
+      : new Date(runStart.getTime() - 5 * 60000);
+
     await pool.query(
       `INSERT INTO time_sync_state (key, cursor, last_run_at, last_error)
        VALUES ($1, $2, now(), NULL)
        ON CONFLICT (key) DO UPDATE SET cursor = EXCLUDED.cursor, last_run_at = now(), last_error = NULL`,
-      [SYNC_KEY, new Date(runStart.getTime() - 5 * 60000)]
+      [SYNC_KEY, cursor]
     );
-    await audit('sync', null, 'st_shifts', null, { count: items.length, since }, 'system');
-    console.log(`[ST SYNC] ${items.length} timesheets since ${since.toISOString()}`);
+    await audit('sync', null, 'st_shifts', null, { count: items.length, scanned: all.length, since, capped }, 'system');
+    console.log(`[ST SYNC] ${items.length} office punches (of ${all.length} activities) ` +
+                (since ? `modified since ${since.toISOString()}` : `created in the last ${BACKFILL_DAYS} days`) +
+                (capped ? ` — backlog, resuming at ${cursor.toISOString()}` : ''));
+
+    // A backlog would otherwise take one 10-minute tick per 10k records to clear.
+    if (capped) setTimeout(syncShifts, 5000);
   } catch (e) {
     const msg = e.response ? `${e.response.status} ${e.response.data?.title || ''}`.trim() : e.message;
     await pool.query(
@@ -549,7 +588,21 @@ async function shiftsOnDate(date) {
 }
 
 const shiftsOf = (rows, personName) => rows.filter(r => namesMatch(r.person_name, personName));
-const minutesOf = shifts => shifts.reduce((n, s) => n + (s.minutes || 0), 0);
+
+// An unclosed punch on a past day is a missed clock-out. On today it is just
+// someone still at work, which is not something to flag a manager about.
+const missedClockOut = (shifts, date) => date < azToday() && shifts.some(s => !s.ended_at);
+// ServiceTitan gives an open punch no end, so it has no duration. On today that just
+// means still working and the time so far counts; on a past day it is a missed
+// clock-out, where running the clock to now would invent days of work out of nothing.
+function shiftMinutes(s) {
+  if (UNPAID_CODES.has(s.timesheet_code)) return 0;
+  if (s.minutes != null) return s.minutes;
+  if (!s.started_at || azBucket(s.started_at).azDate !== azToday()) return 0;
+  return Math.max(0, Math.round((Date.now() - new Date(s.started_at)) / 60000));
+}
+
+const minutesOf = shifts => shifts.reduce((n, s) => n + shiftMinutes(s), 0);
 
 app.get('/api/time/day', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'No database connection' });
@@ -592,7 +645,7 @@ app.get('/api/manager/day', requireAuth, requireManager, async (req, res) => {
         person: name,
         shifts,
         minutes: minutesOf(shifts),
-        openShift: shifts.some(s => !s.ended_at),
+        openShift: missedClockOut(shifts, date),
         activity: activity.totals,
         hours: activity.hours.map(h => ({ hour: h.hour, total: h.total }))
       };
@@ -631,7 +684,7 @@ app.get('/api/manager/week', requireAuth, requireManager, async (req, res) => {
           date,
           minutes: minutesOf(shifts),
           activity: Object.values(totals).reduce((a, b) => a + b, 0),
-          openShift: shifts.some(s => !s.ended_at)
+          openShift: missedClockOut(shifts, date)
         };
       });
       return {
