@@ -433,8 +433,17 @@ column is either a date or a person:
 |---|---|---|
 | My Calendar — Day | one date | yes, notes |
 | My Calendar — Week | seven dates | yes, notes |
-| Team — Day (coverage board) | one per person with something that day | read-only |
-| Team — Week | seven dates for one selected person | read-only |
+| A team member's Day / Week | same, for whoever the manager tapped | read-only |
+
+**Team is a list, not a grid.** Thirteen columns of calendar is unreadable on a phone, so the
+Team screen is a tappable row per person — name, role, hours, overtime, activity count — and
+tapping opens that person's own Day/Week calendar with a back button. The person screen is
+the same code for yourself and for someone you are reviewing; `viewing === null` means you.
+
+**Overtime is the yellow part of the block.** `blocksFor()` walks a day's punches in order,
+accumulating paid minutes, and splits the block at the exact minute the day crosses eight
+hours: blue below, yellow above. That shows *how much* overtime rather than merely that some
+exists. Meal breaks are drawn but never count toward the eight.
 
 **The axis is a full 24 hours**, scrolled to the first punch. Punches in this tenant run from
 00:00 to 23:00 and 56 exceed 12 hours, so a 6am–6pm window silently crops real work.
@@ -449,10 +458,10 @@ on a past day, where running it to now would invent days of work.
 **Who the manager views show.** The tracker tags its office staff with a role — Ranger,
 Rangerette, Red Ranger — and that tag *is* the Internal Team list on the Dashboard. The
 manager views derive from it (`teamRoles()` in [server.js](server.js)) rather than keeping a
-second list that would drift: 13 role-tagged people plus `EXTRA_TEAM`, currently Sarah Lewis,
-who punches in ServiceTitan but has no tracker row. `?all=1` widens it to the whole roster;
-the toggle remembers the choice per browser. On the short list an empty column is kept — it
-says who was off — while across everyone the empty ones are dropped as noise.
+second list that would drift, with two hand-kept exceptions sitting next to each other:
+`EXTRA_TEAM` adds Sarah Lewis, who punches in ServiceTitan but has no tracker row, and
+`EXCLUDE_TEAM` drops Angel Pacaldo. **13 people, no toggle** — someone with no hours still
+shows, because that is what says who was off.
 | POST | `/api/time/approve` | approve a day or a week |
 | GET | `/api/time/export?from=&to=&format=csv` | weekly detail + summary |
 

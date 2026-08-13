@@ -107,29 +107,9 @@ select, input, textarea {
 .hint  { font-size: 12px; color: var(--text3); margin-top: 8px; line-height: 1.5; }
 .error { font-size: 13px; color: var(--red); margin-top: 12px; }
 
-/* ─── My Day ────────────────────────────────────────────────────────────── */
-
-.day-body { padding: 16px; }
-
-.sessions { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
-.session {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 10px; padding: 12px 14px; font-size: 14px;
-}
-.session .range { font-weight: 600; }
-.session .job   { color: var(--accent); font-size: 12px; font-weight: 600; margin-top: 4px; }
-
-/* ─── Team ──────────────────────────────────────────────────────────────── */
+/* ─── Team list ─────────────────────────────────────────────────────────── */
 
 .team-body { padding: 16px; }
-
-.seg { display: flex; gap: 6px; padding: 12px 16px 0; }
-.seg button {
-  flex: 1; padding: 9px; border: 1px solid var(--border); border-radius: 8px;
-  background: var(--surface); color: var(--text2);
-  font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer;
-}
-.seg button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 .banner {
   background: color-mix(in srgb, var(--red) 12%, var(--surface));
@@ -138,23 +118,53 @@ select, input, textarea {
   font-size: 13px; color: var(--text1); line-height: 1.5;
 }
 
+.people { display: flex; flex-direction: column; gap: 6px; }
+
+.person {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 13px 14px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--text1);
+  font-family: inherit; font-size: 15px; text-align: left; cursor: pointer;
+}
+.person:hover { border-color: var(--accent); }
+.person .nm  { flex: 1; min-width: 0; font-weight: 600; }
+.person .nm i {
+  display: block; font-style: normal; font-size: 11px;
+  font-weight: 400; color: var(--text3);
+}
+.person .hrs { font-variant-numeric: tabular-nums; color: var(--text2); white-space: nowrap; }
+.person .hrs em { font-style: normal; color: var(--text3); }
+.person .act {
+  min-width: 30px; text-align: right; font-size: 12px; color: var(--text3);
+  font-variant-numeric: tabular-nums;
+}
+.person .chev { color: var(--text3); }
+
+/* Overtime, in the same yellow as the block past the eight-hour mark. */
+.ot-tag {
+  color: #a16207; background: color-mix(in srgb, #eab308 22%, transparent);
+  border-radius: 5px; padding: 1px 6px; font-size: 12px; font-weight: 600; margin-left: 6px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ot-tag { color: #fde047; } }
+:root[data-theme="dark"] .ot-tag { color: #fde047; }
+
+.warn { color: var(--red); font-size: 16px; line-height: 1; margin-left: 4px; }
+
 /* ─── Calendar ──────────────────────────────────────────────────────────── */
 
 /* Scrolls inside itself — vertically through 24 hours, sideways through columns —
    so the page body never scrolls in either direction. */
 .cal {
-  display: flex; max-height: 62vh; overflow: auto;
+  display: flex; max-height: 58vh; overflow: auto;
   -webkit-overflow-scrolling: touch;
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
 }
 
 .gutter { position: sticky; left: 0; z-index: 3; background: var(--surface); flex: none; }
 .tick {
-  width: 52px; padding-right: 6px; box-sizing: border-box;
+  width: 52px; padding: 2px 6px 0 0; box-sizing: border-box;
   border-top: 1px solid var(--border); border-right: 1px solid var(--border);
-  font-size: 10px; color: var(--text3); text-align: right;
-  /* Sit the label on its own gridline rather than centred in the slot. */
-  line-height: 1; padding-top: 2px;
+  font-size: 10px; color: var(--text3); text-align: right; line-height: 1;
 }
 
 .cols { display: flex; }
@@ -172,7 +182,8 @@ select, input, textarea {
 
 .colbody { position: relative; }
 
-/* The clocked-in block, positioned against the hour axis like a calendar event. */
+/* The clocked-in block, positioned against the hour axis like a calendar event.
+   Blue to eight hours, yellow past it, so the overtime *is* the yellow part. */
 .blk {
   position: absolute; left: 3px; right: 3px; z-index: 1;
   border-radius: 5px; box-sizing: border-box;
@@ -180,8 +191,14 @@ select, input, textarea {
   border-left: 3px solid var(--accent);
   font-size: 10px; color: var(--text2); padding: 2px 4px; overflow: hidden;
 }
+.blk.ot {
+  background: color-mix(in srgb, #eab308 32%, transparent);
+  border-left-color: #eab308; color: #854d0e; font-weight: 600;
+}
 .blk.meal { background: color-mix(in srgb, var(--text3) 20%, transparent); border-left-color: var(--text3); }
 .blk.open { border-left-style: dashed; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .blk.ot { color: #fef08a; } }
+:root[data-theme="dark"] .blk.ot { color: #fef08a; }
 
 /* Hour cells sit above the blocks so the whole hour stays tappable. */
 .cel {
@@ -194,21 +211,33 @@ select, input, textarea {
 .cel:hover { background: color-mix(in srgb, var(--text1) 6%, transparent); }
 /* Activity with no punch under it — a missed punch, not a performance signal. */
 .cel.orphan { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--red) 45%, transparent); }
-.cel .dot {
-  width: 5px; height: 5px; border-radius: 50%; background: var(--green); display: block;
+.cel .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); display: block; }
+
+/* ─── One person ────────────────────────────────────────────────────────── */
+
+.seg { display: flex; gap: 6px; padding: 12px 16px 0; }
+.seg button {
+  flex: 1; padding: 9px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); color: var(--text2);
+  font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer;
+}
+.seg button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.day-body { padding: 16px; }
+
+.total { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+
+.section-h {
+  font-size: 12px; font-weight: 600; color: var(--text3);
+  text-transform: uppercase; letter-spacing: .6px; margin: 22px 0 10px;
 }
 
-.picker { padding: 12px 16px 0; display: flex; gap: 8px; align-items: center; }
-.picker select { font-size: 15px; }
-
-.toggle {
-  flex: none; padding: 8px 12px; border-radius: 999px;
-  border: 1px solid var(--border); background: var(--surface); color: var(--text2);
-  font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; white-space: nowrap;
+.dayblock { margin-bottom: 18px; }
+.dayblock h4 {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 14px; margin-bottom: 8px;
 }
-.toggle.on { border-color: var(--accent); color: var(--accent); }
-
-.total { font-size: 14px; font-weight: 600; margin-bottom: 10px; }
+.dayblock h4 span { font-weight: 400; font-size: 13px; color: var(--text2); }
 
 .hour-detail { margin-bottom: 4px; }
 .hour-detail .who { font-weight: 600; margin-bottom: 8px; }
@@ -216,7 +245,6 @@ select, input, textarea {
   margin-top: 10px; padding: 10px; border-radius: 8px;
   background: var(--bg); font-size: 14px; line-height: 1.5;
 }
-.warn { color: var(--red); font-size: 16px; line-height: 1; margin-left: 4px; }
 
 .hours { display: flex; flex-direction: column; gap: 6px; }
 .hour {
@@ -240,6 +268,13 @@ select, input, textarea {
 .chip b { color: var(--text1); }
 
 .quiet { font-size: 13px; color: var(--text3); }
+.hour.tappable { cursor: pointer; }
+.hour.tappable:hover { border-color: var(--accent); }
+.hour .note {
+  margin-top: 6px; font-size: 13px; line-height: 1.5; color: var(--text1);
+  border-left: 2px solid var(--green); padding-left: 8px;
+}
+.hour .add { margin-top: 6px; font-size: 12px; color: var(--accent); font-weight: 600; }
 .tag   { font-size: 11px; color: var(--text3); font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
 
 .framing {

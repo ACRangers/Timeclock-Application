@@ -30,9 +30,10 @@
     </div>
   </section>
 
-  <!-- My Calendar -->
+  <!-- One person: mine, or whoever was tapped in the team list -->
   <section id="day" class="screen" hidden>
     <header class="bar">
+      <button id="day-back" class="link" hidden>‹ Team</button>
       <span id="day-who"></span>
       <button id="signout" class="link">Sign out</button>
     </header>
@@ -49,9 +50,11 @@
     <div class="day-body">
       <p class="total" id="day-total"></p>
       <div id="day-cal"></div>
+      <h3 class="section-h">Hour by hour</h3>
+      <div id="day-hours" class="hours"></div>
       <p class="framing">
         A blank hour is not an idle hour. Meetings, training, one long call, and work done
-        directly in ServiceTitan never show up here — tap an hour to add what you did.
+        directly in ServiceTitan never show up here.
       </p>
       <p class="stamp" id="day-stamp"></p>
     </div>
@@ -64,18 +67,9 @@
       <span id="team-range"></span>
       <button id="team-next" class="link">›</button>
     </header>
-    <div class="seg">
-      <button id="seg-day" class="active">Day</button>
-      <button id="seg-week">Week</button>
-    </div>
-    <div class="picker">
-      <select id="team-person" hidden></select>
-      <button id="team-scope" class="toggle"></button>
-    </div>
-
     <div class="team-body">
       <p id="team-banner" class="banner" hidden></p>
-      <div id="team-cal"></div>
+      <div id="team-list" class="people"></div>
       <p class="framing">
         Hours come from ServiceTitan. Activity is what the tracker happened to see — a quiet
         hour is not an idle one, so read it as context, never as a score.

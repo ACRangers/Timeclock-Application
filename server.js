@@ -788,13 +788,12 @@ function teamStatus(roles, name) {
 
 app.get('/api/manager/day', requireAuth, requireManager, async (req, res) => {
   const date = req.query.date || azToday();
-  const all = req.query.all === '1';
   try {
     const bundle = await dayBundle(date);
     const roles = teamRoles(bundle.ctx.blob);
     const people = teamFor(req.user.name).map(name => {
       const { onTeam, role } = teamStatus(roles, name);
-      if (!onTeam && !all) return null;
+      if (!onTeam) return null;
       const d = personOn(bundle, name);
       return {
         person: name,
@@ -808,7 +807,7 @@ app.get('/api/manager/day', requireAuth, requireManager, async (req, res) => {
         hours: d.activity.hours.map(h => ({ hour: h.hour, total: h.total }))
       };
     }).filter(Boolean).sort((a, b) => a.person.localeCompare(b.person));
-    res.json({ date, cachedAt: bundle.ctx.cachedAt, all, people });
+    res.json({ date, cachedAt: bundle.ctx.cachedAt, people });
   } catch (e) {
     console.error('[MGR DAY]', e.message);
     res.status(500).json({ error: e.message });
@@ -826,20 +825,33 @@ function weekDates(start) {
   });
 }
 
+// One person's day, with the full per-hour metric detail the team list omits.
+app.get('/api/manager/person-day', requireAuth, requireManager, async (req, res) => {
+  const date = req.query.date || azToday();
+  const person = teamFor(req.user.name).find(n => namesMatch(n, req.query.person || ''));
+  if (!person) return res.status(404).json({ error: 'Unknown person' });
+  try {
+    const bundle = await dayBundle(date);
+    res.json({ person, ...personOn(bundle, person) });
+  } catch (e) {
+    console.error('[MGR PERSON DAY]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // One person's week, drawn as a calendar. The roster comes with it so the picker
 // does not need a second round trip.
 app.get('/api/manager/person-week', requireAuth, requireManager, async (req, res) => {
-  const all = req.query.all === '1';
   try {
     const roles = teamRoles((await getMaster()).blob);
     const team = teamFor(req.user.name)
-      .filter(n => all || teamStatus(roles, n).onTeam)
+      .filter(n => teamStatus(roles, n).onTeam)
       .sort((a, b) => a.localeCompare(b));
     const person = team.find(n => namesMatch(n, req.query.person || '')) || team[0];
-    if (!person) return res.json({ team: [], days: [], dates: [], all });
+    if (!person) return res.status(404).json({ error: 'Unknown person' });
     res.json({
       ...await personWeek(person, req.query.start || azToday()),
-      role: teamStatus(roles, person).role, team, all
+      role: teamStatus(roles, person).role, team
     });
   } catch (e) {
     console.error('[MGR PERSON WEEK]', e.message);

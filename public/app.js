@@ -17,16 +17,14 @@ let me = null;
 let dayDate = azTodayStr();
 let mineMode = 'day';
 let teamDate = azTodayStr();
-let teamMode = 'day';
-let teamPerson = null;
-// Default to the tracker's own Internal Team tagging; the choice sticks per browser.
-let teamAll = localStorage.getItem('tc_team_all') === '1';
+// Whose calendar the person screen is showing: null means mine, a name means a
+// manager tapped them in the team list.
+let viewing = null;
 
 // The last payload each view rendered, so tapping an hour can show its detail
 // without going back to the server.
 let myDays = [];
 let teamDay = null;
-let teamWeek = null;
 
 // fetch() does not throw on 400/500 — an unchecked res.ok turns a failure into a silent success.
 async function api(url, opts = {}) {
@@ -185,6 +183,37 @@ function blockOf(shift, date) {
   return { top, height: Math.max(end - top, 18), open: !shift.ended_at, code: shift.timesheet_code };
 }
 
+const OT_MINUTES = 8 * 60;
+
+// Blue up to eight hours, yellow past it. Split at the exact minute the day crosses
+// over, so the yellow part *is* the overtime rather than just a warning that some
+// exists. Meal breaks are drawn but do not count toward the eight.
+function blocksFor(shifts, date) {
+  let paidSoFar = 0;
+  return shifts
+    .slice()
+    .sort((a, b) => new Date(a.started_at) - new Date(b.started_at))
+    .flatMap(s => {
+      const b = blockOf(s, date);
+      if (s.timesheet_code === 'Meal') return [{ ...b, kind: 'meal' }];
+
+      const regular = Math.max(0, Math.min(b.height, OT_MINUTES - paidSoFar));
+      const overtime = b.height - regular;
+      paidSoFar += b.height;
+
+      const parts = [];
+      if (regular > 0) parts.push({ ...b, height: regular, kind: 'reg' });
+      if (overtime > 0) parts.push({ ...b, top: b.top + regular, height: overtime, kind: 'ot' });
+      return parts;
+    });
+}
+
+// Paid minutes past the eight-hour mark, for the header line.
+function overtimeOf(shifts) {
+  const paid = shifts.reduce((n, s) => n + (s.timesheet_code === 'Meal' ? 0 : (s.minutes || 0)), 0);
+  return Math.max(0, paid - OT_MINUTES);
+}
+
 // columns: [{ key, label, sub, date, shifts, hours, notes }]
 function renderCalendar(el, columns, { editable = false } = {}) {
   const axis = Array.from({ length: 24 }, (_, h) =>
@@ -195,10 +224,9 @@ function renderCalendar(el, columns, { editable = false } = {}) {
     const covered = coveredHours(col.shifts || [], col.date);
     const notes = col.notes || {};
 
-    const blocks = (col.shifts || []).map(s => {
-      const b = blockOf(s, col.date);
-      const label = b.code && b.code !== 'Working' ? b.code : '';
-      return `<div class="blk${b.open ? ' open' : ''}${b.code === 'Meal' ? ' meal' : ''}"
+    const blocks = blocksFor(col.shifts || [], col.date).map(b => {
+      const label = b.kind === 'ot' ? 'OT' : (b.code && b.code !== 'Working' ? b.code : '');
+      return `<div class="blk ${b.kind}${b.open ? ' open' : ''}"
                    style="top:${b.top / 60 * HOUR_PX}px;height:${b.height / 60 * HOUR_PX}px">
                 <span>${label}</span></div>`;
     }).join('');
@@ -235,40 +263,100 @@ function renderCalendar(el, columns, { editable = false } = {}) {
 
 // ─── My Calendar ───────────────────────────────────────────────────────────
 
+// viewing === null means me; otherwise a name a manager tapped in the team list.
 async function loadDay() {
-  $('day-who').textContent = me?.name || '';
+  const mine = !viewing;
+  $('day-who').textContent = mine ? (me?.name || '') : viewing;
+  $('day-back').hidden = mine;
+  $('signout').hidden = !mine;
   $('day-next').disabled = dayDate >= azTodayStr();
   $('day-cal').innerHTML = '<p class="empty">Loading…</p>';
+  $('day-hours').innerHTML = '';
   $('day-stamp').textContent = '';
   document.querySelectorAll('#day .seg button').forEach(b => {
     b.classList.toggle('active', b.id === `mine-${mineMode}`);
   });
 
+  const who = mine ? '' : `&person=${encodeURIComponent(viewing)}`;
   try {
     if (mineMode === 'day') {
-      const d = await api(`/api/time/day?date=${dayDate}`);
+      const d = mine
+        ? await api(`/api/time/day?date=${dayDate}`)
+        : await api(`/api/manager/person-day?date=${dayDate}${who}`);
       $('day-date').textContent = dayDate === azTodayStr() ? 'Today' : fmtDay(dayDate);
-      $('day-total').textContent = d.minutes ? `${fmtMinutes(d.minutes)} clocked` : 'No ServiceTitan clock-in for this day';
+      $('day-total').innerHTML = totalLine(d.minutes, overtimeOf(d.shifts), 'clocked');
       myDays = [d];
       renderCalendar($('day-cal'), [{
         key: d.date, label: fmtDay(d.date), date: d.date,
         shifts: d.shifts, hours: d.activity.hours, notes: d.notes
-      }], { editable: true });
+      }], { editable: mine });
+      renderBreakdown(d, mine);
       stamp('day-stamp', d.activity.cachedAt);
     } else {
-      const w = await api(`/api/time/week?start=${dayDate}`);
+      const w = mine
+        ? await api(`/api/time/week?start=${dayDate}`)
+        : await api(`/api/manager/person-week?start=${dayDate}${who}`);
       $('day-date').textContent = `${fmtDay(w.start)} – ${fmtDay(w.end)}`;
-      $('day-total').textContent = `${fmtMinutes(w.minutes)} clocked this week`;
+      const weekOt = w.days.reduce((n, d) => n + overtimeOf(d.shifts), 0);
+      $('day-total').innerHTML = totalLine(w.minutes, weekOt, 'clocked this week');
       myDays = w.days;
       renderCalendar($('day-cal'), w.days.map(d => ({
         key: d.date, label: fmtDay(d.date).split(' ')[0], sub: d.date.slice(5).replace('-', '/'),
         date: d.date, shifts: d.shifts, hours: d.activity.hours, notes: d.notes
-      })), { editable: true });
+      })), { editable: mine });
+      renderWeekBreakdown(w, mine);
       stamp('day-stamp', w.days[0]?.activity.cachedAt);
     }
   } catch (e) {
     $('day-cal').innerHTML = `<p class="empty">${escapeHtml(e.message)}</p>`;
   }
+}
+
+const totalLine = (minutes, ot, label) =>
+  (minutes ? `${fmtMinutes(minutes)} ${label}` : 'No ServiceTitan clock-in') +
+  (ot > 0 ? ` <span class="ot-tag">${fmtMinutes(ot)} overtime</span>` : '');
+
+// The hour-by-hour list under the calendar: what the tracker saw, and the note.
+function renderBreakdown(day, editable) {
+  const covered = coveredHours(day.shifts, day.date);
+  const rows = day.activity.hours.filter(h => covered.has(h.hour) || h.total > 0 || day.notes[h.hour]);
+  $('day-hours').innerHTML = rows.length
+    ? rows.map(h => hourRow(h, covered.has(h.hour), day.notes[h.hour], day.date, editable)).join('')
+    : '<p class="empty">Nothing recorded for this day.</p>';
+}
+
+function renderWeekBreakdown(week, editable) {
+  const days = week.days.filter(d => d.shifts.length || d.activity.hours.some(h => h.total));
+  $('day-hours').innerHTML = days.length
+    ? days.map(d => {
+        const covered = coveredHours(d.shifts, d.date);
+        const rows = d.activity.hours.filter(h => covered.has(h.hour) || h.total > 0 || d.notes[h.hour]);
+        const ot = overtimeOf(d.shifts);
+        return `<div class="dayblock">
+                  <h4>${fmtDay(d.date)}<span>${fmtMinutes(d.minutes)}${ot > 0 ? ` · <b class="ot-tag">${fmtMinutes(ot)} OT</b>` : ''}</span></h4>
+                  ${rows.map(h => hourRow(h, covered.has(h.hour), d.notes[h.hour], d.date, editable)).join('')}
+                </div>`;
+      }).join('')
+    : '<p class="empty">Nothing recorded this week.</p>';
+}
+
+function hourRow(h, clockedIn, note, date, editable) {
+  const chips = Object.entries(h.metrics || {})
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => `<span class="chip"><b>${n}</b> ${METRIC_LABELS[k]}</span>`)
+    .join('');
+
+  return `
+    <div class="hour${clockedIn ? '' : ' outside'}${editable ? ' tappable' : ''}"
+         data-date="${date}" data-hour="${h.hour}">
+      <div class="h">${fmtHour(h.hour)}</div>
+      <div class="body">
+        ${clockedIn ? '' : '<div class="tag">Not clocked in</div>'}
+        ${chips ? `<div class="chips">${chips}</div>` : '<div class="quiet">No tracked activity this hour.</div>'}
+        ${note ? `<div class="note">${escapeHtml(note)}</div>`
+               : (editable ? '<div class="add">+ add what you did</div>' : '')}
+      </div>
+    </div>`;
 }
 
 function stamp(id, cachedAt) {
@@ -372,55 +460,49 @@ async function renderSyncBanner() {
   } catch { $('team-banner').hidden = true; }
 }
 
+// The team screen is a list you tap into, not a wall of columns.
 async function loadTeam() {
-  $('team-cal').innerHTML = '<p class="empty">Loading…</p>';
+  $('team-list').innerHTML = '<p class="empty">Loading…</p>';
   $('team-stamp').textContent = '';
   renderSyncBanner();
-  document.querySelectorAll('#team .seg button').forEach(b => {
-    b.classList.toggle('active', b.id === `seg-${teamMode}`);
-  });
   $('team-next').disabled = teamDate >= azTodayStr();
-  $('team-person').hidden = teamMode !== 'week';
-  $('team-scope').textContent = teamAll ? 'Showing everyone' : 'Showing the team';
-  $('team-scope').classList.toggle('on', !teamAll);
-  const scope = teamAll ? '&all=1' : '';
 
   try {
-    if (teamMode === 'day') {
-      const data = await api(`/api/manager/day?date=${teamDate}${scope}`);
-      $('team-range').textContent = teamDate === azTodayStr() ? 'Today' : fmtDay(teamDate);
-      teamDay = data;
-      // On the short list, an empty column is the useful part — it says who was off.
-      // Across everyone it is just noise, so drop the people with nothing that day.
-      const shown = data.all
-        ? data.people.filter(p => p.shifts.length || p.hours.some(h => h.total))
-        : data.people;
-      renderCalendar($('team-cal'), shown.map(p => ({
-        key: p.person,
-        label: p.person.split(' ')[0],
-        sub: p.minutes ? fmtMinutes(p.minutes) : '—',
-        date: data.date,
-        shifts: p.shifts,
-        hours: p.hours,
-        notes: p.notes
-      })));
-      stamp('team-stamp', data.cachedAt);
-    } else {
-      const data = await api(`/api/manager/person-week?start=${teamDate}&person=${encodeURIComponent(teamPerson || '')}${scope}`);
-      teamPerson = data.person;
-      teamWeek = data;
-      $('team-range').textContent = `${fmtDay(data.start)} – ${fmtDay(data.end)}`;
-      $('team-person').innerHTML = data.team
-        .map(n => `<option${n === data.person ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
-      renderCalendar($('team-cal'), data.days.map(d => ({
-        key: d.date, label: fmtDay(d.date).split(' ')[0], sub: d.date.slice(5).replace('-', '/'),
-        date: d.date, shifts: d.shifts, hours: d.activity.hours, notes: d.notes
-      })));
-      stamp('team-stamp', data.days[0]?.activity.cachedAt);
-    }
+    const data = await api(`/api/manager/day?date=${teamDate}`);
+    $('team-range').textContent = teamDate === azTodayStr() ? 'Today' : fmtDay(teamDate);
+    teamDay = data;
+
+    // Everyone on the list shows, including people with no hours — that is the part
+    // that says who was off.
+    $('team-list').innerHTML = data.people.length
+      ? data.people.map(p => {
+          const ot = overtimeOf(p.shifts);
+          const acts = Object.values(p.activity).reduce((a, b) => a + b, 0);
+          return `
+            <button class="person" data-person="${escapeHtml(p.person)}">
+              <span class="nm">${escapeHtml(p.person)}${p.role ? `<i>${escapeHtml(p.role)}</i>` : ''}</span>
+              <span class="hrs">
+                ${p.minutes ? fmtMinutes(p.minutes) : '<em>off</em>'}
+                ${ot > 0 ? `<b class="ot-tag">+${fmtMinutes(ot)} OT</b>` : ''}
+                ${p.openShift ? '<b class="warn" title="No clock-out">•</b>' : ''}
+              </span>
+              <span class="act">${acts || ''}</span>
+              <span class="chev">›</span>
+            </button>`;
+        }).join('')
+      : '<p class="empty">Nobody clocked in on this day.</p>';
+
+    stamp('team-stamp', data.cachedAt);
   } catch (e) {
-    $('team-cal').innerHTML = `<p class="empty">${escapeHtml(e.message)}</p>`;
+    $('team-list').innerHTML = `<p class="empty">${escapeHtml(e.message)}</p>`;
   }
+}
+
+// Tapping a person opens their calendar; the tab bar and back button return here.
+function openPerson(name) {
+  viewing = name;
+  dayDate = teamDate;
+  showView('day');
 }
 
 function escapeHtml(s) {
@@ -457,43 +539,31 @@ $('day-next').addEventListener('click', () => {
 $('mine-day').addEventListener('click', () => { mineMode = 'day'; loadDay(); });
 $('mine-week').addEventListener('click', () => { mineMode = 'week'; loadDay(); });
 
-$('team-prev').addEventListener('click', () => { teamDate = shiftDate(teamDate, teamMode === 'day' ? -1 : -7); loadTeam(); });
+$('team-prev').addEventListener('click', () => { teamDate = shiftDate(teamDate, -1); loadTeam(); });
 $('team-next').addEventListener('click', () => {
   if (teamDate >= azTodayStr()) return;
-  teamDate = shiftDate(teamDate, teamMode === 'day' ? 1 : 7);
+  teamDate = shiftDate(teamDate, 1);
   loadTeam();
 });
-$('seg-day').addEventListener('click', () => { teamMode = 'day'; loadTeam(); });
-$('seg-week').addEventListener('click', () => { teamMode = 'week'; loadTeam(); });
-$('team-person').addEventListener('change', e => { teamPerson = e.target.value; loadTeam(); });
-$('team-scope').addEventListener('click', () => {
-  teamAll = !teamAll;
-  localStorage.setItem('tc_team_all', teamAll ? '1' : '0');
-  loadTeam();
+$('team-list').addEventListener('click', e => {
+  const row = e.target.closest('.person');
+  if (row) openPerson(row.dataset.person);
 });
+$('day-back').addEventListener('click', () => { viewing = null; showView('team'); });
 
-// One listener per screen rather than per cell — the calendar redraws constantly.
+// One listener per screen rather than per element — both redraw constantly.
 $('day-cal').addEventListener('click', e => {
   const cel = e.target.closest('.cel');
   if (!cel) return;
   const day = myDays.find(d => d.date === cel.dataset.col);
-  if (day) openHourModal({ date: day.date, hour: Number(cel.dataset.hour), day, editable: true });
+  if (day) openHourModal({ date: day.date, hour: Number(cel.dataset.hour), day, editable: !viewing, person: viewing });
 });
 
-$('team-cal').addEventListener('click', e => {
-  const cel = e.target.closest('.cel');
-  if (!cel) return;
-  if (teamMode === 'day') {
-    const p = teamDay?.people.find(x => x.person === cel.dataset.col);
-    // The coverage board carries hour totals, not per-metric detail.
-    if (p) openHourModal({
-      date: teamDay.date, hour: Number(cel.dataset.hour), person: p.person, editable: false,
-      day: { notes: p.notes, activity: { hours: p.hours.map(h => ({ ...h, metrics: null })) } }
-    });
-  } else {
-    const day = teamWeek?.days.find(d => d.date === cel.dataset.col);
-    if (day) openHourModal({ date: day.date, hour: Number(cel.dataset.hour), day, editable: false, person: teamWeek.person });
-  }
+$('day-hours').addEventListener('click', e => {
+  const row = e.target.closest('.hour');
+  if (!row) return;
+  const day = myDays.find(d => d.date === row.dataset.date);
+  if (day) openHourModal({ date: day.date, hour: Number(row.dataset.hour), day, editable: !viewing, person: viewing });
 });
 
 $('hour-cancel').addEventListener('click', () => { $('hour-modal').hidden = true; });
