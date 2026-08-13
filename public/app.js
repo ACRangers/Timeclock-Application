@@ -675,6 +675,35 @@ $('mine-day').addEventListener('click', () => { mineMode = 'day'; loadDay(); });
 $('mine-week').addEventListener('click', () => { mineMode = 'week'; loadDay(); });
 
 // The week is already loaded, so switching days is a redraw, not a round trip.
+// The header label opens the browser's own date picker, so jumping to a date is one
+// click rather than a run of arrow presses.
+function openDatePicker(id, current) {
+  const el = $(id);
+  el.value = current;
+  el.max = azTodayStr();
+  if (el.showPicker) {
+    try { el.showPicker(); return; } catch { /* not user-activated; fall through */ }
+  }
+  el.focus();
+  el.click();
+}
+
+$('day-date').addEventListener('click', () => openDatePicker('day-date-input', dayDate));
+$('day-date-input').addEventListener('change', e => {
+  if (!e.target.value) return;
+  dayDate = e.target.value;
+  // Picking a day in week mode should land the Day Report on that day, not on today.
+  weekDay = dayDate;
+  loadDay();
+});
+
+$('team-range').addEventListener('click', () => openDatePicker('team-date-input', teamDate));
+$('team-date-input').addEventListener('change', e => {
+  if (!e.target.value) return;
+  teamDate = e.target.value;
+  loadTeam();
+});
+
 $('day-picker').addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b) return;
