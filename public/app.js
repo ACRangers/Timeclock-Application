@@ -384,6 +384,13 @@ function renderBreakdown(day, editable) {
     : '<p class="empty">Nothing recorded for this day.</p>';
 }
 
+const chipsOf = metrics => Object.entries(metrics || {})
+  .filter(([, n]) => n > 0)
+  .map(([k, n]) => `<span class="chip"><b>${n}</b> ${METRIC_LABELS[k]}</span>`)
+  .join('');
+
+// The week has no calendar of its own to name things on, so its breakdown carries
+// both: the hour's tally, then each event under it.
 function renderWeekBreakdown(week, editable) {
   const days = week.days.filter(d => d.shifts.length || d.activity.hours.some(h => h.total));
   $('day-hours').innerHTML = days.length
@@ -392,18 +399,24 @@ function renderWeekBreakdown(week, editable) {
         const rows = d.activity.hours.filter(h => covered.has(h.hour) || h.total > 0 || d.notes[h.hour]);
         const ot = overtimeOf(d.shifts);
         return `<div class="dayblock">
-                  <h4>${fmtDay(d.date)}<span>${fmtMinutes(d.minutes)}${ot > 0 ? ` · <b class="ot-tag">${fmtMinutes(ot)} OT</b>` : ''}</span></h4>
-                  ${rows.map(h => hourRow(h, covered.has(h.hour), d.notes[h.hour], d.date, editable)).join('')}
+                  <div class="dayhead">
+                    <h4>${fmtDay(d.date)}</h4>
+                    <span class="mins">${d.minutes ? fmtMinutes(d.minutes) : 'no clock-in'}${
+                      ot > 0 ? ` <b class="ot-tag">${fmtMinutes(ot)} OT</b>` : ''}</span>
+                    <div class="chips">${chipsOf(d.activity.totals)}</div>
+                  </div>
+                  ${rows.map(h => hourRow(h, covered.has(h.hour), d.notes[h.hour], d.date, editable, true)).join('')}
                 </div>`;
       }).join('')
     : '<p class="empty">Nothing recorded this week.</p>';
 }
 
-function hourRow(h, clockedIn, note, date, editable) {
-  const chips = Object.entries(h.metrics || {})
-    .filter(([, n]) => n > 0)
-    .map(([k, n]) => `<span class="chip"><b>${n}</b> ${METRIC_LABELS[k]}</span>`)
-    .join('');
+function hourRow(h, clockedIn, note, date, editable, withEvents = false) {
+  const chips = chipsOf(h.metrics);
+  const events = !withEvents ? '' : (h.details || []).map(ev => `
+    <span class="pill ${ev.kind}">
+      <b>${EVENT_LABELS[ev.kind] || ev.kind}</b>, ${fmtClock(ev.at)}${ev.label ? ` · ${escapeHtml(ev.label)}` : ''}
+    </span>`).join('');
 
   return `
     <div class="hour${clockedIn ? '' : ' outside'}${editable ? ' tappable' : ''}"
@@ -412,6 +425,7 @@ function hourRow(h, clockedIn, note, date, editable) {
       <div class="body">
         ${clockedIn ? '' : '<div class="tag">Not clocked in</div>'}
         ${chips ? `<div class="chips">${chips}</div>` : '<div class="quiet">No tracked activity this hour.</div>'}
+        ${events ? `<div class="evlist">${events}</div>` : ''}
         ${note ? `<div class="note">${escapeHtml(note)}</div>`
                : (editable ? '<div class="add">+ add what you did</div>' : '')}
       </div>

@@ -683,8 +683,10 @@ function personOn(bundle, personName) {
 
 async function personWeek(personName, start) {
   const dates = weekDates(start);
-  const days = [];
-  for (const date of dates) days.push(personOn(await dayBundle(date), personName));
+  // The seven days do not depend on each other, so fetching them one after another
+  // just multiplied the wait by seven.
+  const bundles = await Promise.all(dates.map(dayBundle));
+  const days = bundles.map(b => personOn(b, personName));
   return {
     person: personName,
     start: dates[0],

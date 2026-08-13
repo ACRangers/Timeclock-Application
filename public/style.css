@@ -9,6 +9,9 @@
   --green:   #16a34a;
   --red:     #dc2626;
   --shadow:  0 1px 3px rgba(15, 23, 42, .08);
+  /* One measure for the whole app: wide enough to use an ultrawide, short enough
+     that no line runs the full 3440px. Change this one value to retune it. */
+  --measure: 2000px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -41,9 +44,11 @@ body {
 
 /* ─── Bars and tabs ─────────────────────────────────────────────────────── */
 
+/* Bars keep a full-width background but pad their contents in to the measure. */
 .bar {
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px; padding: 14px 16px;
+  padding-inline: max(16px, calc((100% - var(--measure)) / 2));
   background: var(--surface); border-bottom: 1px solid var(--border);
   font-size: 15px; font-weight: 600;
   position: sticky; top: 0; z-index: 5;
@@ -112,7 +117,8 @@ select, input, textarea {
 
 /* ─── Team list ─────────────────────────────────────────────────────────── */
 
-.team-body { padding: 16px; }
+/* A list of thirteen rows does not get better by being 3000px wide. */
+.team-body { padding: 16px; max-width: 1100px; margin: 0 auto; }
 
 .banner {
   background: color-mix(in srgb, var(--red) 12%, var(--surface));
@@ -170,8 +176,10 @@ select, input, textarea {
   font-size: 10px; color: var(--text3); text-align: right; line-height: 1;
 }
 
-.cols { display: flex; }
-.col { flex: none; width: 104px; border-right: 1px solid var(--border); }
+/* The columns take the room the gutter does not — without this they collapse to
+   their minimum and leave the rest of the calendar empty. */
+.cols { display: flex; flex: 1; min-width: 0; }
+.col { flex: 1 1 104px; min-width: 104px; border-right: 1px solid var(--border); }
 .col:last-child { border-right: 0; }
 
 .colhead {
@@ -218,7 +226,7 @@ select, input, textarea {
 
 /* Day view: one pill per thing that happened, at the minute it happened. They do
    not take clicks — the hour cell underneath owns those, and lists everything. */
-.cal.detailed .col { flex: 1; min-width: 280px; }
+.cal.detailed .col { min-width: 280px; }
 .cal.detailed .cel { justify-content: flex-end; align-items: flex-start; padding: 2px 4px 0 0; }
 
 /* Full-width pills would bury the shift block, so in day view the block narrows to
@@ -261,7 +269,12 @@ select, input, textarea {
 
 /* ─── One person ────────────────────────────────────────────────────────── */
 
-.seg { display: flex; gap: 6px; padding: 12px 16px 0; }
+.seg {
+  display: flex; gap: 6px; padding: 12px 16px 0;
+  padding-inline: max(16px, calc((100% - var(--measure)) / 2));
+}
+/* A full-width segmented control on an ultrawide is two enormous buttons. */
+.seg button { max-width: 320px; }
 .seg button {
   flex: 1; padding: 9px; border: 1px solid var(--border); border-radius: 8px;
   background: var(--surface); color: var(--text2);
@@ -269,7 +282,33 @@ select, input, textarea {
 }
 .seg button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
-.day-body { padding: 16px; }
+.day-body { padding: 16px; max-width: var(--measure); margin: 0 auto; }
+
+/* Two columns cost the calendar the width the list takes, so this only earns its
+   keep once the calendar still clears ~1000px afterwards. Below that the list stays
+   underneath, where it has the whole width to itself. */
+@media (min-width: 1400px) {
+  .day-body {
+    display: grid; align-items: start; column-gap: 26px;
+    /* Proportional, so the list does not take a fixed 440px out of the calendar the
+       moment the second column appears. */
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 0.34fr);
+    grid-template-areas:
+      "head     head"
+      "cal      breakdown"
+      "framing  breakdown"
+      "stamp    breakdown";
+  }
+  .person-head { grid-area: head; }
+  #day-cal     { grid-area: cal; }
+  .breakdown   { grid-area: breakdown; max-height: 78vh; overflow: auto; }
+  .framing     { grid-area: framing; }
+  .stamp       { grid-area: stamp; }
+  .breakdown .section-h { margin-top: 0; }
+}
+
+/* A taller screen can show more of the day at once. */
+@media (min-height: 900px) { .cal { max-height: 68vh; } }
 
 /* Name and the day's totals read as one line, wrapping on a narrow screen. */
 .person-head {
@@ -284,12 +323,23 @@ select, input, textarea {
   text-transform: uppercase; letter-spacing: .6px; margin: 22px 0 10px;
 }
 
-.dayblock { margin-bottom: 18px; }
-.dayblock h4 {
-  display: flex; justify-content: space-between; align-items: baseline;
-  font-size: 14px; margin-bottom: 8px;
+.dayblock { margin-bottom: 22px; }
+.dayhead {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px;
+  padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border);
 }
-.dayblock h4 span { font-weight: 400; font-size: 13px; color: var(--text2); }
+.dayhead h4 { font-size: 15px; }
+.dayhead .mins { font-size: 13px; color: var(--text2); font-variant-numeric: tabular-nums; }
+.dayhead .chips { flex: 1; justify-content: flex-end; }
+
+/* The same coloured pills as the calendar, but flowing in a list rather than
+   positioned on an axis. */
+.evlist { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.evlist .pill {
+  position: static; width: auto; max-width: 100%;
+  height: auto; line-height: 1.45; padding: 2px 9px;
+  border-right: 0; pointer-events: auto;
+}
 
 .hour-detail { margin-bottom: 4px; }
 .hour-detail .who { font-weight: 600; margin-bottom: 8px; }
