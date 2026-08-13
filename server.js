@@ -766,7 +766,8 @@ const teamFor = viewer => ROSTER.filter(name => !namesMatch(name, viewer));
 // The tracker tags its office staff with a role — Ranger, Rangerette, Red Ranger.
 // That tag is the same list John reviews on the Dashboard, so it decides who the
 // manager views show by default; a second hand-kept list would only drift from it.
-const EXTRA_TEAM = ['Sarah Lewis'];   // punches in ST, has no tracker row, so no role
+const EXTRA_TEAM = ['Sarah Lewis'];      // punches in ST, has no tracker row, so no role
+const EXCLUDE_TEAM = ['Angel Pacaldo'];  // role-tagged in the tracker, not reviewed here
 
 function teamRoles(blob) {
   const roles = new Map();
@@ -774,6 +775,9 @@ function teamRoles(blob) {
     if (r.name && r.name !== 'TOTAL' && r.role) roles.set(r.name.trim(), r.role);
   });
   EXTRA_TEAM.forEach(n => { if (!roles.has(n)) roles.set(n, null); });
+  EXCLUDE_TEAM.forEach(x => {
+    for (const known of roles.keys()) if (namesMatch(known, x)) roles.delete(known);
+  });
   return roles;
 }
 
