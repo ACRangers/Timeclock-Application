@@ -129,7 +129,14 @@ const USERNAME_TO_NAME = {
   'acrjose':            'Jose',
   'actrina':            'Trina',
   'acclay':             'Ryan Clayton Santos',
-  'acranne':            'Anne Frac'
+  'acranne':            'Anne Frac',
+  // Punching in ServiceTitan but absent from the tracker roster (added 2026-08-13).
+  // These usernames are ours, not the tracker's — no scoreboard row matches them yet,
+  // so they show hours with no activity until the tracker knows them too.
+  'acsarah':            'Sarah Lewis',
+  'acabrielle':         'Abrielle Uyehara',
+  'acluis':             'Luis Angel Orozco',
+  'aceric':             'Eric Robinson'
 };
 
 // Loose name compare: ST names may differ from login names (e.g. "Ryan Santos" vs "Ryan Clayton Santos")
