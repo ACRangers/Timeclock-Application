@@ -216,6 +216,37 @@ select, input, textarea {
 .cel.orphan { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--red) 45%, transparent); }
 .cel .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); display: block; }
 
+/* Day view: one pill per thing that happened, at the minute it happened. They do
+   not take clicks — the hour cell underneath owns those, and lists everything. */
+.cal.detailed .col { flex: 1; min-width: 280px; }
+.cal.detailed .cel { justify-content: flex-end; align-items: flex-start; padding: 2px 4px 0 0; }
+
+/* Full-width pills would bury the shift block, so in day view the block narrows to
+   a spine down the left edge — still blue below eight hours and yellow above. */
+.cal.detailed .blk { right: auto; width: 9px; padding: 0; border-radius: 4px; }
+.cal.detailed .blk span { display: none; }
+.cal.detailed .pill { left: 20px; }
+
+.pill {
+  position: absolute; left: 6px; right: 6px; z-index: 3;
+  height: 15px; line-height: 15px; padding: 0 8px;
+  border-radius: 999px; box-sizing: border-box;
+  background: #0ea5e9; color: #fff;
+  font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none;
+}
+.pill b { font-weight: 700; }
+.pill.callsOut       { background: #6366f1; }
+.pill.jobsCreated    { background: #16a34a; }
+.pill.jobsDispatched { background: #0d9488; }
+.pill.estSent        { background: #c026d3; }
+.pill.audits         { background: #ea580c; }
+.pill.invoices       { background: #b45309; }
+.pill.more {
+  background: none; color: var(--text3); font-weight: 600;
+  border: 1px dashed var(--border); line-height: 13px;
+}
+
 /* ─── One person ────────────────────────────────────────────────────────── */
 
 .seg { display: flex; gap: 6px; padding: 12px 16px 0; }
@@ -254,6 +285,14 @@ select, input, textarea {
   margin-top: 10px; padding: 10px; border-radius: 8px;
   background: var(--bg); font-size: 14px; line-height: 1.5;
 }
+.hour-detail .ev {
+  display: flex; gap: 10px; align-items: baseline;
+  padding: 5px 0; border-top: 1px solid var(--border); font-size: 13px;
+}
+.hour-detail .chips + .ev { margin-top: 10px; }
+.hour-detail .ev .t { flex: 0 0 62px; color: var(--text3); font-variant-numeric: tabular-nums; }
+.hour-detail .ev .k { font-weight: 600; }
+.hour-detail .ev .l { color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .hours { display: flex; flex-direction: column; gap: 6px; }
 .hour {

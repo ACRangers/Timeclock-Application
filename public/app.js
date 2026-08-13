@@ -162,7 +162,28 @@ async function doLogin() {
 // Day, week, and the team coverage board are the same thing drawn three ways: a
 // 24-hour axis with a set of columns beside it. A column is one date or one person.
 
+// A week has to fit seven columns, so its rows stay tight and show counts. A single
+// day has room to name each thing that happened, so its rows are tall enough to.
+// 160px fits 9 events an hour. Measured against three days of real activity that
+// names 82% of events outright and leaves a quarter of hours needing "+N more";
+// the median hour has 6 events, the busiest seen had 20.
 const HOUR_PX = 44;
+const HOUR_PX_DAY = 160;
+const PILL_PX = 15;
+
+const EVENT_LABELS = {
+  callsIn:        'Inbound',
+  callsOut:       'Outbound',
+  jobsCreated:    'Job Created',
+  jobsDispatched: 'Dispatched',
+  estSent:        'Estimate Sent',
+  audits:         'Audit',
+  invoices:       'Invoice'
+};
+
+const fmtClock = iso => new Date(iso)
+  .toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Phoenix' })
+  .replace(':00', '').replace(' AM', 'am').replace(' PM', 'pm');
 
 // Minutes from midnight, Arizona, for positioning a block on the axis.
 const azMinutes = iso => {
@@ -215,10 +236,48 @@ function overtimeOf(shifts) {
   return Math.max(0, paid - OT_MINUTES);
 }
 
+// Each event sits at the minute it happened, pushed down only as far as it must be
+// to clear the one above. A busy hour runs out of room — 20 calls will not fit in
+// any honest hour — so the rest collapse into a "+N more" the hour detail opens.
+//
+// How many fit is decided first, from the row height, so three events late in the
+// hour still all show: the stack slides up to fit rather than dropping its tail.
+function pillsFor(hour, hourPx) {
+  const band = hour.hour * hourPx;
+  const limit = band + hourPx - 2;
+  const capacity = Math.max(1, Math.floor((hourPx - 2) / (PILL_PX + 1)));
+
+  const overflowing = hour.details.length > capacity;
+  const shown = hour.details.slice(0, overflowing ? capacity - 1 : hour.details.length);
+
+  // Forward: put each at its own minute, nudged down past the one above it.
+  let next = band;
+  const placed = shown.map(ev => {
+    const top = Math.max(next, band + (new Date(ev.at).getUTCMinutes() / 60) * hourPx);
+    next = top + PILL_PX + 1;
+    return { ...ev, top };
+  });
+
+  // Backward: pull anything that ran past the bottom back inside, taking the ones
+  // above it along. Events late in the hour compress instead of falling off.
+  let ceiling = limit - PILL_PX;
+  for (let i = placed.length - 1; i >= 0; i--) {
+    placed[i].top = Math.min(placed[i].top, ceiling);
+    ceiling = placed[i].top - PILL_PX - 1;
+  }
+
+  return {
+    placed,
+    more: hour.details.length - placed.length,
+    moreTop: limit - PILL_PX
+  };
+}
+
 // columns: [{ key, label, sub, date, shifts, hours, notes }]
-function renderCalendar(el, columns, { editable = false } = {}) {
+function renderCalendar(el, columns, { editable = false, detailed = false } = {}) {
+  const hourPx = detailed ? HOUR_PX_DAY : HOUR_PX;
   const axis = Array.from({ length: 24 }, (_, h) =>
-    `<div class="tick" style="height:${HOUR_PX}px">${fmtHour(h)}</div>`).join('');
+    `<div class="tick" style="height:${hourPx}px">${fmtHour(h)}</div>`).join('');
 
   const cols = columns.map(col => {
     const byHour = Object.fromEntries((col.hours || []).map(h => [h.hour, h.total]));
@@ -228,7 +287,7 @@ function renderCalendar(el, columns, { editable = false } = {}) {
     const blocks = blocksFor(col.shifts || [], col.date).map(b => {
       const label = b.kind === 'ot' ? 'OT' : (b.code && b.code !== 'Working' ? b.code : '');
       return `<div class="blk ${b.kind}${b.open ? ' open' : ''}"
-                   style="top:${b.top / 60 * HOUR_PX}px;height:${b.height / 60 * HOUR_PX}px">
+                   style="top:${b.top / 60 * hourPx}px;height:${b.height / 60 * hourPx}px">
                 <span>${label}</span></div>`;
     }).join('');
 
@@ -239,19 +298,30 @@ function renderCalendar(el, columns, { editable = false } = {}) {
       // Activity with no punch under it is worth a look, but only for someone who
       // punched at all that day — no punches is missing data, not 24 missed hours.
       const orphan = !on && n > 0 && (col.shifts || []).length > 0;
-      return `<div class="cel${on ? ' on' : ''}${orphan ? ' orphan' : ''}" style="height:${HOUR_PX}px"
+      return `<div class="cel${on ? ' on' : ''}${orphan ? ' orphan' : ''}" style="height:${hourPx}px"
                    data-col="${col.key}" data-hour="${h}">
-                ${n ? `<b>${n}</b>` : ''}${notes[h] ? '<i class="dot"></i>' : ''}
+                ${n && !detailed ? `<b>${n}</b>` : ''}${notes[h] ? '<i class="dot"></i>' : ''}
               </div>`;
+    }).join('');
+
+    // Named events, one pill each, only where there is room to read them.
+    const pills = !detailed ? '' : (col.hours || []).filter(h => h.total).map(h => {
+      const { placed, more, moreTop } = pillsFor(h, hourPx);
+      return placed.map(ev => `
+        <div class="pill ${ev.kind}" style="top:${ev.top}px"
+             title="${escapeHtml(ev.label || '')}">
+          <b>${EVENT_LABELS[ev.kind] || ev.kind}</b>, ${fmtClock(ev.at)}${ev.label ? ` · ${escapeHtml(ev.label)}` : ''}
+        </div>`).join('')
+        + (more ? `<div class="pill more" style="top:${moreTop}px">+${more} more</div>` : '');
     }).join('');
 
     return `<div class="col">
               <div class="colhead">${escapeHtml(col.label)}${col.sub ? `<span>${escapeHtml(col.sub)}</span>` : ''}</div>
-              <div class="colbody" style="height:${24 * HOUR_PX}px">${blocks}${cells}</div>
+              <div class="colbody" style="height:${24 * hourPx}px">${blocks}${cells}${pills}</div>
             </div>`;
   }).join('');
 
-  el.innerHTML = `<div class="cal${editable ? ' editable' : ''}">
+  el.innerHTML = `<div class="cal${editable ? ' editable' : ''}${detailed ? ' detailed' : ''}">
                     <div class="gutter"><div class="colhead"></div>${axis}</div>
                     <div class="cols">${cols}</div>
                   </div>`;
@@ -259,7 +329,7 @@ function renderCalendar(el, columns, { editable = false } = {}) {
   // Open on the working day rather than on midnight.
   const first = columns.flatMap(c => (c.shifts || []).map(s => azMinutes(s.started_at)));
   const scroller = el.querySelector('.cal');
-  if (scroller) scroller.scrollTop = Math.max(0, (first.length ? Math.min(...first) : 420) / 60 * HOUR_PX - HOUR_PX);
+  if (scroller) scroller.scrollTop = Math.max(0, (first.length ? Math.min(...first) : 420) / 60 * hourPx - hourPx);
 }
 
 // ─── My Calendar ───────────────────────────────────────────────────────────
@@ -290,7 +360,7 @@ async function loadDay() {
       renderCalendar($('day-cal'), [{
         key: d.date, label: fmtDay(d.date), date: d.date,
         shifts: d.shifts, hours: d.activity.hours, notes: d.notes
-      }], { editable: mine });
+      }], { editable: mine, detailed: true });
       renderBreakdown(d, mine);
       stamp('day-stamp', d.activity.cachedAt);
     } else {
@@ -394,11 +464,19 @@ function openHourModal({ date, hour, day, editable, person }) {
   const chips = chipsFor(h);
   openHour = editable ? { date, hour } : null;
 
+  // Every event in the hour, so the calendar's "+N more" has somewhere to lead.
+  const events = (h?.details || []).map(ev => `
+    <div class="ev">
+      <span class="t">${fmtClock(ev.at)}</span>
+      <span class="k">${EVENT_LABELS[ev.kind] || ev.kind}</span>
+      <span class="l">${escapeHtml(ev.label || '')}</span>
+    </div>`).join('');
+
   $('hour-title').textContent = `${fmtHour(hour)} · ${fmtDay(date)}`;
   $('hour-detail').innerHTML =
     (person ? `<div class="who">${escapeHtml(person)}</div>` : '') +
-    (chips ? `<div class="chips">${chips}</div>`
-           : '<div class="quiet">No tracked activity this hour.</div>') +
+    (chips ? `<div class="chips">${chips}</div>` : '') +
+    (events || (chips ? '' : '<div class="quiet">No tracked activity this hour.</div>')) +
     (day.notes?.[hour] && !editable ? `<div class="note">${escapeHtml(day.notes[hour])}</div>` : '');
 
   const note = day.notes?.[hour] || '';
