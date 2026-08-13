@@ -164,12 +164,16 @@ async function doLogin() {
 
 // A week has to fit seven columns, so its rows stay tight and show counts. A single
 // day has room to name each thing that happened, so its rows are tall enough to.
-// 160px fits 9 events an hour. Measured against three days of real activity that
-// names 82% of events outright and leaves a quarter of hours needing "+N more";
-// the median hour has 6 events, the busiest seen had 20.
+// Each hour is six rows of ten minutes; events in the same ten minutes sit side by
+// side. Stacking them down the hour instead made a burst of four calls at 1:38 look
+// like work spread across the hour, which is the opposite of what happened.
+//
+// Measured over three days: a ten-minute slot holds 2 events at the median, 4 at the
+// 90th, 7 at the very most — so columns can show every one and nothing is hidden.
 const HOUR_PX = 44;
-const HOUR_PX_DAY = 160;
-const PILL_PX = 15;
+const HOUR_PX_DAY = 126;
+const SLOTS_PER_HOUR = 6;
+const PILL_PX = 17;
 
 const EVENT_LABELS = {
   callsIn:        'Inbound',
@@ -236,41 +240,25 @@ function overtimeOf(shifts) {
   return Math.max(0, paid - OT_MINUTES);
 }
 
-// Each event sits at the minute it happened, pushed down only as far as it must be
-// to clear the one above. A busy hour runs out of room — 20 calls will not fit in
-// any honest hour — so the rest collapse into a "+N more" the hour detail opens.
-//
-// How many fit is decided first, from the row height, so three events late in the
-// hour still all show: the stack slides up to fit rather than dropping its tail.
+// The row says when, to the nearest ten minutes; the columns say how much happened
+// in that ten minutes. Four calls in one slot read as four abreast, not as four
+// stacked down an hour they did not occupy.
 function pillsFor(hour, hourPx) {
   const band = hour.hour * hourPx;
-  const limit = band + hourPx - 2;
-  const capacity = Math.max(1, Math.floor((hourPx - 2) / (PILL_PX + 1)));
+  const rowPx = hourPx / SLOTS_PER_HOUR;
 
-  const overflowing = hour.details.length > capacity;
-  const shown = hour.details.slice(0, overflowing ? capacity - 1 : hour.details.length);
-
-  // Forward: put each at its own minute, nudged down past the one above it.
-  let next = band;
-  const placed = shown.map(ev => {
-    const top = Math.max(next, band + (new Date(ev.at).getUTCMinutes() / 60) * hourPx);
-    next = top + PILL_PX + 1;
-    return { ...ev, top };
+  const slots = Array.from({ length: SLOTS_PER_HOUR }, () => []);
+  hour.details.forEach(ev => {
+    const slot = Math.min(SLOTS_PER_HOUR - 1, Math.floor(new Date(ev.at).getUTCMinutes() / 10));
+    slots[slot].push(ev);
   });
 
-  // Backward: pull anything that ran past the bottom back inside, taking the ones
-  // above it along. Events late in the hour compress instead of falling off.
-  let ceiling = limit - PILL_PX;
-  for (let i = placed.length - 1; i >= 0; i--) {
-    placed[i].top = Math.min(placed[i].top, ceiling);
-    ceiling = placed[i].top - PILL_PX - 1;
-  }
-
-  return {
-    placed,
-    more: hour.details.length - placed.length,
-    moreTop: limit - PILL_PX
-  };
+  return slots.flatMap((events, row) => events.map((ev, i) => ({
+    ...ev,
+    top: band + row * rowPx,
+    left: (i / events.length) * 100,
+    width: 100 / events.length
+  })));
 }
 
 // columns: [{ key, label, sub, date, shifts, hours, notes }]
@@ -304,16 +292,16 @@ function renderCalendar(el, columns, { editable = false, detailed = false } = {}
               </div>`;
     }).join('');
 
-    // Named events, one pill each, only where there is room to read them.
-    const pills = !detailed ? '' : (col.hours || []).filter(h => h.total).map(h => {
-      const { placed, more, moreTop } = pillsFor(h, hourPx);
-      return placed.map(ev => `
-        <div class="pill ${ev.kind}" style="top:${ev.top}px"
-             title="${escapeHtml(ev.label || '')}">
+    // Named events, laid out in their ten-minute row. The lane keeps them clear of
+    // the shift spine, so the percentages are of the space actually available.
+    const pills = !detailed ? '' : `<div class="lane">${
+      (col.hours || []).filter(h => h.total).flatMap(h => pillsFor(h, hourPx)).map(ev => `
+        <div class="pill ${ev.kind}"
+             style="top:${ev.top}px;left:${ev.left}%;width:${ev.width}%"
+             title="${EVENT_LABELS[ev.kind] || ev.kind}, ${fmtClock(ev.at)}${ev.label ? ` · ${escapeHtml(ev.label)}` : ''}">
           <b>${EVENT_LABELS[ev.kind] || ev.kind}</b>, ${fmtClock(ev.at)}${ev.label ? ` · ${escapeHtml(ev.label)}` : ''}
         </div>`).join('')
-        + (more ? `<div class="pill more" style="top:${moreTop}px">+${more} more</div>` : '');
-    }).join('');
+    }</div>`;
 
     return `<div class="col">
               <div class="colhead">${escapeHtml(col.label)}${col.sub ? `<span>${escapeHtml(col.sub)}</span>` : ''}</div>

@@ -441,6 +441,15 @@ Team screen is a tappable row per person — name, role, hours, overtime, activi
 tapping opens that person's own Day/Week calendar with a back button. The person screen is
 the same code for yourself and for someone you are reviewing; `viewing === null` means you.
 
+**The day view is a ten-minute grid, not a list.** Each hour is six rows of ten
+minutes; everything that happened in the same ten minutes sits side by side as columns
+(`pillsFor()` in [public/app.js](public/app.js)). Stacking events down the hour instead made
+a burst of four calls at 1:38 read as work spread across the hour — the opposite of the truth.
+Measured over three days: a ten-minute slot holds 2 events at the median, 4 at the 90th and 7
+at the very most, so columns show **every** event and nothing is hidden behind a "+N more".
+The shift block narrows to a spine down the left edge here, or full-width pills would bury the
+overtime colour.
+
 **Overtime is the yellow part of the block.** `blocksFor()` walks a day's punches in order,
 accumulating paid minutes, and splits the block at the exact minute the day crosses eight
 hours: blue below, yellow above. That shows *how much* overtime rather than merely that some
