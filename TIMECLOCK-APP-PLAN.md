@@ -39,7 +39,8 @@ the things done outside estimates / invoices / inbound / outbound / new work ord
 | Who clocks in | **Office team only** (~22 tracker logins). Not field techs — see §6. |
 | Payroll-grade? | **Not yet.** Build accountability-first, but with a **full audit trail from day one** so it can become payroll-grade without a rewrite. |
 | How time is captured | **Read from ServiceTitan** (Payroll → Timesheets), never entered here. ST punches define the hours; within the day, each hour shows the tracker's auto-recorded activity. *(Revised 2026-08-12 — was "clock in/out in the app".)* |
-| Manager access | `is_manager` on `time_users`, re-applied at each sign-in from the `MANAGERS` set in `server.js`. `johnacr` only, for now. |
+| Manager access | `is_manager` on `time_users`, re-applied at each sign-in from the `MANAGERS` set in `server.js`: `johnacr`, plus the shared `ACRManager` account. |
+| Shared manager sign-in | **`ACRManager` / PIN 2026**, seeded in `initDB()` with `ON CONFLICT DO NOTHING` so it is never claimed by whoever signs in first. It matches nobody in ServiceTitan or the tracker, so it has no hours, no My Calendar and no tab bar — team views only, with Sign out in the Team header. Being shared, its audit entries read "Manager" rather than a person; that is why notes stay tied to the individual accounts. |
 | Week start | **Sunday.** |
 
 ---

@@ -96,6 +96,13 @@ async function initDB() {
         at        TIMESTAMPTZ DEFAULT now()
       )
     `);
+    // The shared manager account ships with its PIN already set, so nobody claims
+    // it by being first. DO NOTHING, so changing it later is not undone on restart.
+    await pool.query(
+      `INSERT INTO time_users (username, person_name, pin_hash, is_manager)
+       VALUES ($1, $2, $3, TRUE) ON CONFLICT (username) DO NOTHING`,
+      [MANAGER_ONLY, USERNAME_TO_NAME[MANAGER_ONLY], await bcrypt.hash('2026', 10)]
+    );
     console.log('DB: time_users, time_st_shifts, time_notes, time_sync_state, time_audit_log ready');
   } catch (e) {
     console.error('DB init error:', e.message);
@@ -152,8 +159,13 @@ const USERNAME_TO_NAME = {
   'acsarah':            'Sarah Lewis',
   'acabrielle':         'Abrielle Uyehara',
   'acluis':             'Luis Angel Orozco',
-  'aceric':             'Eric Robinson'
+  'aceric':             'Eric Robinson',
+  // A shared sign-in that only ever sees the team views. It matches nobody in
+  // ServiceTitan or the tracker, so it has no hours of its own and no My Calendar.
+  'ACRManager':         'Manager'
 };
+
+const MANAGER_ONLY = 'ACRManager';
 
 // Loose name compare: ST names may differ from login names (e.g. "Ryan Santos" vs "Ryan Clayton Santos")
 function namesMatch(a, b) {
@@ -166,7 +178,7 @@ function namesMatch(a, b) {
 
 // Manager access is re-applied from here on every sign-in, so this list stays the
 // single place it is decided.
-const MANAGERS = new Set(['johnacr']);
+const MANAGERS = new Set(['johnacr', MANAGER_ONLY]);
 
 function resolveUsername(input) {
   const raw = (input || '').trim();
@@ -302,7 +314,11 @@ app.post('/api/auth/logout', (req, res) => {
 
 app.get('/api/me', requireAuth, async (req, res) => {
   const { rows } = await pool.query('SELECT is_manager FROM time_users WHERE username = $1', [req.user.username]);
-  res.json({ ...req.user, isManager: !!rows[0]?.is_manager });
+  res.json({
+    ...req.user,
+    isManager: !!rows[0]?.is_manager,
+    managerOnly: req.user.username === MANAGER_ONLY
+  });
 });
 
 // ─── The tracker's activity feed (read-only) ──────────────────────────────────

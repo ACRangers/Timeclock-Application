@@ -93,7 +93,8 @@ function fmtMinutes(mins) {
 
 function showView(name) {
   ['login', 'day', 'team'].forEach(v => { $(v).hidden = v !== name; });
-  $('tabs').hidden = name === 'login';
+  // The shared manager account has no timesheet of its own, so it gets no tab bar.
+  $('tabs').hidden = name === 'login' || !!me?.managerOnly;
   document.querySelectorAll('.tabs button').forEach(b => {
     b.classList.toggle('active', b.dataset.view === name);
   });
@@ -514,6 +515,7 @@ function escapeHtml(s) {
 async function start() {
   $('tab-team').hidden = !me?.isManager;
   // A manager opens on the team, not on their own timesheet.
+  viewing = null;
   showView(me?.isManager ? 'team' : 'day');
 }
 
@@ -525,10 +527,12 @@ $('login-pin').addEventListener('input', e => {
 $('login-pin').addEventListener('keydown', e => { if (e.key === 'Enter' && !$('login-btn').disabled) doLogin(); });
 $('login-btn').addEventListener('click', doLogin);
 
-$('signout').addEventListener('click', async () => {
+async function signOut() {
   await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
   showLogin();
-});
+}
+$('signout').addEventListener('click', signOut);
+$('team-signout').addEventListener('click', signOut);
 
 $('day-prev').addEventListener('click', () => { dayDate = shiftDate(dayDate, mineMode === 'day' ? -1 : -7); loadDay(); });
 $('day-next').addEventListener('click', () => {
