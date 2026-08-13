@@ -19,6 +19,8 @@ let mineMode = 'day';
 let teamDate = azTodayStr();
 let teamMode = 'day';
 let teamPerson = null;
+// Default to the tracker's own Internal Team tagging; the choice sticks per browser.
+let teamAll = localStorage.getItem('tc_team_all') === '1';
 
 // The last payload each view rendered, so tapping an hour can show its detail
 // without going back to the server.
@@ -378,15 +380,21 @@ async function loadTeam() {
     b.classList.toggle('active', b.id === `seg-${teamMode}`);
   });
   $('team-next').disabled = teamDate >= azTodayStr();
-  $('team-picker').hidden = teamMode !== 'week';
+  $('team-person').hidden = teamMode !== 'week';
+  $('team-scope').textContent = teamAll ? 'Showing everyone' : 'Showing the team';
+  $('team-scope').classList.toggle('on', !teamAll);
+  const scope = teamAll ? '&all=1' : '';
 
   try {
     if (teamMode === 'day') {
-      const data = await api(`/api/manager/day?date=${teamDate}`);
+      const data = await api(`/api/manager/day?date=${teamDate}${scope}`);
       $('team-range').textContent = teamDate === azTodayStr() ? 'Today' : fmtDay(teamDate);
       teamDay = data;
-      // Only people with something that day — 25 empty columns is not a coverage board.
-      const shown = data.people.filter(p => p.shifts.length || p.hours.some(h => h.total));
+      // On the short list, an empty column is the useful part — it says who was off.
+      // Across everyone it is just noise, so drop the people with nothing that day.
+      const shown = data.all
+        ? data.people.filter(p => p.shifts.length || p.hours.some(h => h.total))
+        : data.people;
       renderCalendar($('team-cal'), shown.map(p => ({
         key: p.person,
         label: p.person.split(' ')[0],
@@ -398,7 +406,7 @@ async function loadTeam() {
       })));
       stamp('team-stamp', data.cachedAt);
     } else {
-      const data = await api(`/api/manager/person-week?start=${teamDate}&person=${encodeURIComponent(teamPerson || '')}`);
+      const data = await api(`/api/manager/person-week?start=${teamDate}&person=${encodeURIComponent(teamPerson || '')}${scope}`);
       teamPerson = data.person;
       teamWeek = data;
       $('team-range').textContent = `${fmtDay(data.start)} – ${fmtDay(data.end)}`;
@@ -458,6 +466,11 @@ $('team-next').addEventListener('click', () => {
 $('seg-day').addEventListener('click', () => { teamMode = 'day'; loadTeam(); });
 $('seg-week').addEventListener('click', () => { teamMode = 'week'; loadTeam(); });
 $('team-person').addEventListener('change', e => { teamPerson = e.target.value; loadTeam(); });
+$('team-scope').addEventListener('click', () => {
+  teamAll = !teamAll;
+  localStorage.setItem('tc_team_all', teamAll ? '1' : '0');
+  loadTeam();
+});
 
 // One listener per screen rather than per cell — the calendar redraws constantly.
 $('day-cal').addEventListener('click', e => {

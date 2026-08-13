@@ -763,14 +763,39 @@ const ROSTER = Object.values(USERNAME_TO_NAME);
 // reviewing. They still see them in My Day.
 const teamFor = viewer => ROSTER.filter(name => !namesMatch(name, viewer));
 
+// The tracker tags its office staff with a role — Ranger, Rangerette, Red Ranger.
+// That tag is the same list John reviews on the Dashboard, so it decides who the
+// manager views show by default; a second hand-kept list would only drift from it.
+const EXTRA_TEAM = ['Sarah Lewis'];   // punches in ST, has no tracker row, so no role
+
+function teamRoles(blob) {
+  const roles = new Map();
+  (blob?.data || []).forEach(r => {
+    if (r.name && r.name !== 'TOTAL' && r.role) roles.set(r.name.trim(), r.role);
+  });
+  EXTRA_TEAM.forEach(n => { if (!roles.has(n)) roles.set(n, null); });
+  return roles;
+}
+
+function teamStatus(roles, name) {
+  for (const [known, role] of roles) if (namesMatch(known, name)) return { onTeam: true, role };
+  return { onTeam: false, role: null };
+}
+
 app.get('/api/manager/day', requireAuth, requireManager, async (req, res) => {
   const date = req.query.date || azToday();
+  const all = req.query.all === '1';
   try {
     const bundle = await dayBundle(date);
+    const roles = teamRoles(bundle.ctx.blob);
     const people = teamFor(req.user.name).map(name => {
+      const { onTeam, role } = teamStatus(roles, name);
+      if (!onTeam && !all) return null;
       const d = personOn(bundle, name);
       return {
         person: name,
+        role,
+        onTeam,
         shifts: d.shifts,
         minutes: d.minutes,
         openShift: d.openShift,
@@ -778,8 +803,8 @@ app.get('/api/manager/day', requireAuth, requireManager, async (req, res) => {
         activity: d.activity.totals,
         hours: d.activity.hours.map(h => ({ hour: h.hour, total: h.total }))
       };
-    }).sort((a, b) => a.person.localeCompare(b.person));
-    res.json({ date, cachedAt: bundle.ctx.cachedAt, people });
+    }).filter(Boolean).sort((a, b) => a.person.localeCompare(b.person));
+    res.json({ date, cachedAt: bundle.ctx.cachedAt, all, people });
   } catch (e) {
     console.error('[MGR DAY]', e.message);
     res.status(500).json({ error: e.message });
@@ -800,10 +825,18 @@ function weekDates(start) {
 // One person's week, drawn as a calendar. The roster comes with it so the picker
 // does not need a second round trip.
 app.get('/api/manager/person-week', requireAuth, requireManager, async (req, res) => {
-  const team = teamFor(req.user.name);
-  const person = team.find(n => namesMatch(n, req.query.person || '')) || team[0];
+  const all = req.query.all === '1';
   try {
-    res.json({ ...await personWeek(person, req.query.start || azToday()), team });
+    const roles = teamRoles((await getMaster()).blob);
+    const team = teamFor(req.user.name)
+      .filter(n => all || teamStatus(roles, n).onTeam)
+      .sort((a, b) => a.localeCompare(b));
+    const person = team.find(n => namesMatch(n, req.query.person || '')) || team[0];
+    if (!person) return res.json({ team: [], days: [], dates: [], all });
+    res.json({
+      ...await personWeek(person, req.query.start || azToday()),
+      role: teamStatus(roles, person).role, team, all
+    });
   } catch (e) {
     console.error('[MGR PERSON WEEK]', e.message);
     res.status(500).json({ error: e.message });

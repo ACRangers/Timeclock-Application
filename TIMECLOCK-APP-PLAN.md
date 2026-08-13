@@ -445,6 +445,14 @@ on a past day, where running it to now would invent days of work.
 
 **Managers land on Team**, everyone else on My Calendar (`start()` in
 [public/app.js](public/app.js)).
+
+**Who the manager views show.** The tracker tags its office staff with a role — Ranger,
+Rangerette, Red Ranger — and that tag *is* the Internal Team list on the Dashboard. The
+manager views derive from it (`teamRoles()` in [server.js](server.js)) rather than keeping a
+second list that would drift: 13 role-tagged people plus `EXTRA_TEAM`, currently Sarah Lewis,
+who punches in ServiceTitan but has no tracker row. `?all=1` widens it to the whole roster;
+the toggle remembers the choice per browser. On the short list an empty column is kept — it
+says who was off — while across everyone the empty ones are dropped as noise.
 | POST | `/api/time/approve` | approve a day or a week |
 | GET | `/api/time/export?from=&to=&format=csv` | weekly detail + summary |
 
