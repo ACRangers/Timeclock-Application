@@ -634,11 +634,15 @@ async function requireManager(req, res, next) {
 
 const ROSTER = Object.values(USERNAME_TO_NAME);
 
+// A manager's own hours are their business, not part of the team grid they are
+// reviewing. They still see them in My Day.
+const teamFor = viewer => ROSTER.filter(name => !namesMatch(name, viewer));
+
 app.get('/api/manager/day', requireAuth, requireManager, async (req, res) => {
   const date = req.query.date || azToday();
   try {
     const [all, ctx] = await Promise.all([shiftsOnDate(date), dayContext(date)]);
-    const people = ROSTER.map(name => {
+    const people = teamFor(req.user.name).map(name => {
       const shifts = shiftsOf(all, name);
       const activity = activityFor(name, date, ctx);
       return {
@@ -676,7 +680,7 @@ app.get('/api/manager/week', requireAuth, requireManager, async (req, res) => {
       const [all, ctx] = await Promise.all([shiftsOnDate(date), dayContext(date)]);
       days.push({ date, all, ctx });
     }
-    const people = ROSTER.map(name => {
+    const people = teamFor(req.user.name).map(name => {
       const cells = days.map(({ date, all, ctx }) => {
         const shifts = shiftsOf(all, name);
         const totals = activityFor(name, date, ctx).totals;
