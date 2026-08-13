@@ -12,10 +12,12 @@ const METRIC_LABELS = {
   audits:         'audits',
   invoices:       'invoices'
 };
+const METRIC_ORDER = Object.keys(METRIC_LABELS);
 
 let me = null;
 let dayDate = azTodayStr();
 let mineMode = 'day';
+let weekDay = null;          // which day the week view's Day Report is showing
 let teamDate = azTodayStr();
 // Whose calendar the person screen is showing: null means mine, a name means a
 // manager tapped them in the team list.
@@ -353,6 +355,8 @@ async function loadDay() {
         shifts: d.shifts, hours: d.activity.hours, notes: d.notes
       }], { editable: mine, detailed: true });
       renderBreakdown(d, mine);
+      $('week-summary').hidden = true;
+      $('day-picker').hidden = true;
       stamp('day-stamp', d.activity.cachedAt);
     } else {
       const w = mine
@@ -368,6 +372,8 @@ async function loadDay() {
         date: d.date, shifts: d.shifts, hours: d.activity.hours, notes: d.notes
       })), { editable: mine });
       renderWeekBreakdown(w, mine);
+      renderWeekSummary(w);
+      $('week-summary').hidden = false;
       stamp('day-stamp', w.days[0]?.activity.cachedAt);
     }
   } catch (e) {
@@ -394,27 +400,65 @@ const chipsOf = metrics => Object.entries(metrics || {})
   .map(([k, n]) => `<span class="chip"><b>${n}</b> ${METRIC_LABELS[k]}</span>`)
   .join('');
 
-// The week has no calendar of its own to name things on, so its breakdown carries
-// both: the hour's tally, then each event under it.
+// One day at a time, chosen from the Sun–Sat strip. Seven days stacked meant
+// scrolling past Monday to reach Thursday.
 function renderWeekBreakdown(week, editable) {
-  const days = week.days.filter(d => d.shifts.length || d.activity.hours.some(h => h.total));
-  $('day-hours').innerHTML = days.length
-    ? days.map(d => {
-        const covered = coveredHours(d.shifts, d.date);
-        const rows = d.activity.hours.filter(h => covered.has(h.hour) || h.total > 0 || d.notes[h.hour]);
-        const ot = overtimeOf(d.shifts);
-        return `<div class="dayblock">
-                  <div class="dayhead">
-                    <h4>${fmtDay(d.date)}</h4>
-                    <span class="mins">${d.minutes ? fmtMinutes(d.minutes) : 'no clock-in'}${
-                      ot > 0 ? ` <b class="ot-tag">${fmtMinutes(ot)} OT</b>` : ''}${
-                      d.activity.points ? ` <b class="pts-tag">${fmtPoints(d.activity.points)} pts</b>` : ''}</span>
-                    <div class="chips">${chipsOf(d.activity.totals)}</div>
-                  </div>
-                  ${rows.map(h => hourRow(h, covered.has(h.hour), d.notes[h.hour], d.date, editable, true)).join('')}
-                </div>`;
-      }).join('')
-    : '<p class="empty">Nothing recorded this week.</p>';
+  const worked = d => d.shifts.length || d.activity.hours.some(h => h.total);
+  if (!week.days.some(d => d.date === weekDay)) {
+    weekDay = (week.days.find(d => d.date === azTodayStr()) && azTodayStr())
+      || week.days.filter(worked).pop()?.date
+      || week.days[0].date;
+  }
+
+  $('day-picker').hidden = false;
+  $('day-picker').innerHTML = week.days.map(d => `
+    <button class="${d.date === weekDay ? 'on' : ''}${worked(d) ? '' : ' bare'}" data-date="${d.date}">
+      ${fmtDay(d.date).split(',')[0]}<i>${Number(d.date.slice(8))}</i>
+    </button>`).join('');
+
+  const d = week.days.find(x => x.date === weekDay);
+  const covered = coveredHours(d.shifts, d.date);
+  const rows = d.activity.hours.filter(h => covered.has(h.hour) || h.total > 0 || d.notes[h.hour]);
+  const ot = overtimeOf(d.shifts);
+
+  $('day-hours').innerHTML = `
+    <div class="dayhead">
+      <h4>${fmtDay(d.date)}</h4>
+      <span class="mins">${d.minutes ? fmtMinutes(d.minutes) : 'no clock-in'}${
+        ot > 0 ? ` <b class="ot-tag">${fmtMinutes(ot)} OT</b>` : ''}${
+        d.activity.points ? ` <b class="pts-tag">${fmtPoints(d.activity.points)} pts</b>` : ''}</span>
+      <div class="chips">${chipsOf(d.activity.totals)}</div>
+    </div>
+    ${rows.length
+      ? rows.map(h => hourRow(h, covered.has(h.hour), d.notes[h.hour], d.date, editable, true)).join('')
+      : '<p class="empty">Nothing recorded on this day.</p>'}`;
+}
+
+function renderWeekSummary(week) {
+  const totals = {};
+  METRIC_ORDER.forEach(k => { totals[k] = week.days.reduce((n, d) => n + (d.activity.totals[k] || 0), 0); });
+  const ot = week.days.reduce((n, d) => n + overtimeOf(d.shifts), 0);
+  const pts = week.days.reduce((n, d) => n + d.activity.points, 0);
+  const worked = week.days.filter(d => d.minutes).length;
+
+  $('week-summary-body').innerHTML = `
+    <div class="sumline">
+      <b>${fmtMinutes(week.minutes)}</b> over ${worked} day${worked === 1 ? '' : 's'}
+      ${ot > 0 ? `<span class="ot-tag">${fmtMinutes(ot)} overtime</span>` : ''}
+      ${pts ? `<span class="pts-tag">${fmtPoints(pts)} points</span>` : ''}
+    </div>
+    <div class="chips">${chipsOf(totals)}</div>
+    <table class="sumtable">
+      <tbody>${week.days.map(d => {
+        const dot = overtimeOf(d.shifts);
+        return `<tr${d.date === weekDay ? ' class="on"' : ''}>
+                  <td>${fmtDay(d.date)}</td>
+                  <td class="n">${d.minutes ? fmtMinutes(d.minutes) : '—'}</td>
+                  <td class="n">${dot > 0 ? `<b class="ot-tag">${fmtMinutes(dot)}</b>` : ''}</td>
+                  <td class="n">${d.activity.points ? fmtPoints(d.activity.points) : ''}</td>
+                </tr>`;
+      }).join('')}</tbody>
+    </table>`;
 }
 
 function hourRow(h, clockedIn, note, date, editable, withEvents = false) {
@@ -629,6 +673,16 @@ $('day-next').addEventListener('click', () => {
 });
 $('mine-day').addEventListener('click', () => { mineMode = 'day'; loadDay(); });
 $('mine-week').addEventListener('click', () => { mineMode = 'week'; loadDay(); });
+
+// The week is already loaded, so switching days is a redraw, not a round trip.
+$('day-picker').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  weekDay = b.dataset.date;
+  const week = { days: myDays, minutes: myDays.reduce((n, d) => n + d.minutes, 0) };
+  renderWeekBreakdown(week, !viewing);
+  renderWeekSummary(week);
+});
 
 $('team-prev').addEventListener('click', () => { teamDate = shiftDate(teamDate, -1); loadTeam(); });
 $('team-next').addEventListener('click', () => {
