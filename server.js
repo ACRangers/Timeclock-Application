@@ -60,6 +60,22 @@ async function initDB() {
       )
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_st_shifts_person_start ON time_st_shifts(person_name, started_at)`);
+    // One note per person per hour — what the tracker could not see. Written by the
+    // person whose hour it is; managers read them.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS time_notes (
+        id          SERIAL PRIMARY KEY,
+        username    TEXT NOT NULL,
+        person_name TEXT NOT NULL,
+        work_date   DATE NOT NULL,
+        hour        INTEGER NOT NULL,
+        note        TEXT NOT NULL,
+        created_at  TIMESTAMPTZ DEFAULT now(),
+        updated_at  TIMESTAMPTZ DEFAULT now(),
+        UNIQUE (username, work_date, hour)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_time_notes_date ON time_notes(work_date)`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS time_sync_state (
         key          TEXT PRIMARY KEY,
@@ -80,7 +96,7 @@ async function initDB() {
         at        TIMESTAMPTZ DEFAULT now()
       )
     `);
-    console.log('DB: time_users, time_st_shifts, time_sync_state, time_audit_log ready');
+    console.log('DB: time_users, time_st_shifts, time_notes, time_sync_state, time_audit_log ready');
   } catch (e) {
     console.error('DB init error:', e.message);
   }
@@ -611,6 +627,104 @@ function shiftMinutes(s) {
 
 const minutesOf = shifts => shifts.reduce((n, s) => n + shiftMinutes(s), 0);
 
+// ─── Hourly notes ─────────────────────────────────────────────────────────────
+//
+// What the tracker could not see. A blank hour is not an idle hour, so this exists
+// to let people say what they were doing — never to make them justify themselves.
+
+async function notesOnDate(date) {
+  const { rows } = await pool.query(
+    'SELECT person_name, hour, note FROM time_notes WHERE work_date = $1::date', [date]
+  );
+  return rows;
+}
+
+// { hour: note } for one person on one day.
+const notesOf = (rows, personName) => Object.fromEntries(
+  rows.filter(r => namesMatch(r.person_name, personName)).map(r => [r.hour, r.note])
+);
+
+// The hour is derived from the session, never from the body, so a note cannot be
+// written onto someone else's timesheet.
+// Everything one Arizona day needs, fetched once and then sliced per person — the
+// same reason dayContext() exists. A week is 7 of these, not 7 x 25 queries.
+async function dayBundle(date) {
+  const [shifts, ctx, notes] = await Promise.all([shiftsOnDate(date), dayContext(date), notesOnDate(date)]);
+  return { date, shifts, ctx, notes };
+}
+
+function personOn(bundle, personName) {
+  const shifts = shiftsOf(bundle.shifts, personName);
+  return {
+    date: bundle.date,
+    shifts,
+    minutes: minutesOf(shifts),
+    openShift: missedClockOut(shifts, bundle.date),
+    notes: notesOf(bundle.notes, personName),
+    activity: activityFor(personName, bundle.date, bundle.ctx)
+  };
+}
+
+async function personWeek(personName, start) {
+  const dates = weekDates(start);
+  const days = [];
+  for (const date of dates) days.push(personOn(await dayBundle(date), personName));
+  return {
+    person: personName,
+    start: dates[0],
+    end: dates[6],
+    dates,
+    days,
+    minutes: days.reduce((n, d) => n + d.minutes, 0)
+  };
+}
+
+app.put('/api/time/notes', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'No database connection' });
+  const date = String(req.body?.date || '');
+  const hour = Number(req.body?.hour);
+  const note = String(req.body?.note || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'Bad date' });
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return res.status(400).json({ error: 'Bad hour' });
+  if (!note) return res.status(400).json({ error: 'Note is empty' });
+
+  try {
+    const { rows: before } = await pool.query(
+      'SELECT * FROM time_notes WHERE username = $1 AND work_date = $2::date AND hour = $3',
+      [req.user.username, date, hour]
+    );
+    const { rows } = await pool.query(
+      `INSERT INTO time_notes (username, person_name, work_date, hour, note)
+       VALUES ($1, $2, $3::date, $4, $5)
+       ON CONFLICT (username, work_date, hour)
+       DO UPDATE SET note = EXCLUDED.note, updated_at = now()
+       RETURNING *`,
+      [req.user.username, req.user.name, date, hour, note]
+    );
+    await audit('note', rows[0].id, before.length ? 'edit' : 'add', before[0] || null, rows[0], req.user.name);
+    res.json(rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/time/notes', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'No database connection' });
+  const date = String(req.body?.date || '');
+  const hour = Number(req.body?.hour);
+  try {
+    const { rows } = await pool.query(
+      'DELETE FROM time_notes WHERE username = $1 AND work_date = $2::date AND hour = $3 RETURNING *',
+      [req.user.username, date, hour]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'No note there' });
+    await audit('note', rows[0].id, 'delete', rows[0], null, req.user.name);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/time/day', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'No database connection' });
   const date = req.query.date || azToday();
@@ -618,15 +732,19 @@ app.get('/api/time/day', requireAuth, async (req, res) => {
     return res.status(403).json({ error: 'You can only view your own day' });
   }
   try {
-    const [all, ctx] = await Promise.all([shiftsOnDate(date), dayContext(date)]);
-    const shifts = shiftsOf(all, req.user.name);
-    res.json({
-      date, person: req.user.name, shifts,
-      minutesTotal: minutesOf(shifts),
-      activity: activityFor(req.user.name, date, ctx)
-    });
+    res.json({ person: req.user.name, ...personOn(await dayBundle(date), req.user.name) });
   } catch (e) {
     console.error('[DAY]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/time/week', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'No database connection' });
+  try {
+    res.json(await personWeek(req.user.name, req.query.start || azToday()));
+  } catch (e) {
+    console.error('[WEEK]', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -648,20 +766,20 @@ const teamFor = viewer => ROSTER.filter(name => !namesMatch(name, viewer));
 app.get('/api/manager/day', requireAuth, requireManager, async (req, res) => {
   const date = req.query.date || azToday();
   try {
-    const [all, ctx] = await Promise.all([shiftsOnDate(date), dayContext(date)]);
+    const bundle = await dayBundle(date);
     const people = teamFor(req.user.name).map(name => {
-      const shifts = shiftsOf(all, name);
-      const activity = activityFor(name, date, ctx);
+      const d = personOn(bundle, name);
       return {
         person: name,
-        shifts,
-        minutes: minutesOf(shifts),
-        openShift: missedClockOut(shifts, date),
-        activity: activity.totals,
-        hours: activity.hours.map(h => ({ hour: h.hour, total: h.total }))
+        shifts: d.shifts,
+        minutes: d.minutes,
+        openShift: d.openShift,
+        notes: d.notes,
+        activity: d.activity.totals,
+        hours: d.activity.hours.map(h => ({ hour: h.hour, total: h.total }))
       };
     }).sort((a, b) => a.person.localeCompare(b.person));
-    res.json({ date, cachedAt: ctx.cachedAt, people });
+    res.json({ date, cachedAt: bundle.ctx.cachedAt, people });
   } catch (e) {
     console.error('[MGR DAY]', e.message);
     res.status(500).json({ error: e.message });
@@ -679,35 +797,15 @@ function weekDates(start) {
   });
 }
 
-app.get('/api/manager/week', requireAuth, requireManager, async (req, res) => {
-  const dates = weekDates(req.query.start || azToday());
+// One person's week, drawn as a calendar. The roster comes with it so the picker
+// does not need a second round trip.
+app.get('/api/manager/person-week', requireAuth, requireManager, async (req, res) => {
+  const team = teamFor(req.user.name);
+  const person = team.find(n => namesMatch(n, req.query.person || '')) || team[0];
   try {
-    const days = [];
-    for (const date of dates) {
-      const [all, ctx] = await Promise.all([shiftsOnDate(date), dayContext(date)]);
-      days.push({ date, all, ctx });
-    }
-    const people = teamFor(req.user.name).map(name => {
-      const cells = days.map(({ date, all, ctx }) => {
-        const shifts = shiftsOf(all, name);
-        const totals = activityFor(name, date, ctx).totals;
-        return {
-          date,
-          minutes: minutesOf(shifts),
-          activity: Object.values(totals).reduce((a, b) => a + b, 0),
-          openShift: missedClockOut(shifts, date)
-        };
-      });
-      return {
-        person: name,
-        cells,
-        minutes: cells.reduce((n, c) => n + c.minutes, 0),
-        activity: cells.reduce((n, c) => n + c.activity, 0)
-      };
-    }).sort((a, b) => a.person.localeCompare(b.person));
-    res.json({ start: dates[0], end: dates[6], dates, people });
+    res.json({ ...await personWeek(person, req.query.start || azToday()), team });
   } catch (e) {
-    console.error('[MGR WEEK]', e.message);
+    console.error('[MGR PERSON WEEK]', e.message);
     res.status(500).json({ error: e.message });
   }
 });

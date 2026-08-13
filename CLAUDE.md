@@ -91,6 +91,11 @@ ServiceTitan. Always frame a gap as **"add what you did"**, never "you did nothi
 rank or score people by activity count. A timesheet people feel surveilled by is one they
 learn to game, and then the data is worthless.
 
+**One calendar renderer, not three.** `renderCalendar()` draws a 24-hour axis with a set of
+columns; a column is a date (day/week) or a person (the team coverage board). Adding a fourth
+view means supplying different columns, not writing another renderer. The axis is always the
+full 24 hours — punches here genuinely run 00:00 to 23:00.
+
 **Write the audit trail from day one.** Every create/edit/approve goes into `time_audit_log`
 with before/after. It is cheap now and is the only thing that lets this become payroll-grade
 later without a rewrite.

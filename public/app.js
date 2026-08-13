@@ -15,8 +15,16 @@ const METRIC_LABELS = {
 
 let me = null;
 let dayDate = azTodayStr();
+let mineMode = 'day';
 let teamDate = azTodayStr();
 let teamMode = 'day';
+let teamPerson = null;
+
+// The last payload each view rendered, so tapping an hour can show its detail
+// without going back to the server.
+let myDays = [];
+let teamDay = null;
+let teamWeek = null;
 
 // fetch() does not throw on 400/500 — an unchecked res.ok turns a failure into a silent success.
 async function api(url, opts = {}) {
@@ -148,21 +156,123 @@ async function doLogin() {
   }
 }
 
-// ─── My Day ────────────────────────────────────────────────────────────────
+// ─── Calendar ──────────────────────────────────────────────────────────────
+//
+// Day, week, and the team coverage board are the same thing drawn three ways: a
+// 24-hour axis with a set of columns beside it. A column is one date or one person.
+
+const HOUR_PX = 44;
+
+// Minutes from midnight, Arizona, for positioning a block on the axis.
+const azMinutes = iso => {
+  const d = new Date(iso);
+  return ((d.getUTCHours() - 7 + 24) % 24) * 60 + d.getUTCMinutes();
+};
+
+// A punch always belongs to one day — ServiceTitan auto-closes at midnight — so a
+// block only ever needs clamping at the end, never splitting across columns.
+function blockOf(shift, date) {
+  const top = azMinutes(shift.started_at);
+  let end;
+  if (shift.ended_at) {
+    end = azDateOf(shift.ended_at) === date ? azMinutes(shift.ended_at) : 1440;
+    if (end <= top) end = 1440;                       // ends exactly at midnight
+  } else {
+    end = date === azTodayStr() ? azMinutes(new Date().toISOString()) : top + 30;
+  }
+  return { top, height: Math.max(end - top, 18), open: !shift.ended_at, code: shift.timesheet_code };
+}
+
+// columns: [{ key, label, sub, date, shifts, hours, notes }]
+function renderCalendar(el, columns, { editable = false } = {}) {
+  const axis = Array.from({ length: 24 }, (_, h) =>
+    `<div class="tick" style="height:${HOUR_PX}px">${fmtHour(h)}</div>`).join('');
+
+  const cols = columns.map(col => {
+    const byHour = Object.fromEntries((col.hours || []).map(h => [h.hour, h.total]));
+    const covered = coveredHours(col.shifts || [], col.date);
+    const notes = col.notes || {};
+
+    const blocks = (col.shifts || []).map(s => {
+      const b = blockOf(s, col.date);
+      const label = b.code && b.code !== 'Working' ? b.code : '';
+      return `<div class="blk${b.open ? ' open' : ''}${b.code === 'Meal' ? ' meal' : ''}"
+                   style="top:${b.top / 60 * HOUR_PX}px;height:${b.height / 60 * HOUR_PX}px">
+                <span>${label}</span></div>`;
+    }).join('');
+
+    // One tappable cell per hour, over the blocks, carrying the activity count.
+    const cells = Array.from({ length: 24 }, (_, h) => {
+      const n = byHour[h] || 0;
+      const on = covered.has(h);
+      // Activity with no punch under it is worth a look, but only for someone who
+      // punched at all that day — no punches is missing data, not 24 missed hours.
+      const orphan = !on && n > 0 && (col.shifts || []).length > 0;
+      return `<div class="cel${on ? ' on' : ''}${orphan ? ' orphan' : ''}" style="height:${HOUR_PX}px"
+                   data-col="${col.key}" data-hour="${h}">
+                ${n ? `<b>${n}</b>` : ''}${notes[h] ? '<i class="dot"></i>' : ''}
+              </div>`;
+    }).join('');
+
+    return `<div class="col">
+              <div class="colhead">${escapeHtml(col.label)}${col.sub ? `<span>${escapeHtml(col.sub)}</span>` : ''}</div>
+              <div class="colbody" style="height:${24 * HOUR_PX}px">${blocks}${cells}</div>
+            </div>`;
+  }).join('');
+
+  el.innerHTML = `<div class="cal${editable ? ' editable' : ''}">
+                    <div class="gutter"><div class="colhead"></div>${axis}</div>
+                    <div class="cols">${cols}</div>
+                  </div>`;
+
+  // Open on the working day rather than on midnight.
+  const first = columns.flatMap(c => (c.shifts || []).map(s => azMinutes(s.started_at)));
+  const scroller = el.querySelector('.cal');
+  if (scroller) scroller.scrollTop = Math.max(0, (first.length ? Math.min(...first) : 420) / 60 * HOUR_PX - HOUR_PX);
+}
+
+// ─── My Calendar ───────────────────────────────────────────────────────────
 
 async function loadDay() {
   $('day-who').textContent = me?.name || '';
-  $('day-date').textContent = dayDate === azTodayStr() ? 'Today' : fmtDay(dayDate);
   $('day-next').disabled = dayDate >= azTodayStr();
-  $('day-hours').innerHTML = '<p class="empty">Loading…</p>';
-  $('day-sessions').innerHTML = '';
+  $('day-cal').innerHTML = '<p class="empty">Loading…</p>';
   $('day-stamp').textContent = '';
+  document.querySelectorAll('#day .seg button').forEach(b => {
+    b.classList.toggle('active', b.id === `mine-${mineMode}`);
+  });
 
   try {
-    renderDay(await api(`/api/time/day?date=${dayDate}`));
+    if (mineMode === 'day') {
+      const d = await api(`/api/time/day?date=${dayDate}`);
+      $('day-date').textContent = dayDate === azTodayStr() ? 'Today' : fmtDay(dayDate);
+      $('day-total').textContent = d.minutes ? `${fmtMinutes(d.minutes)} clocked` : 'No ServiceTitan clock-in for this day';
+      myDays = [d];
+      renderCalendar($('day-cal'), [{
+        key: d.date, label: fmtDay(d.date), date: d.date,
+        shifts: d.shifts, hours: d.activity.hours, notes: d.notes
+      }], { editable: true });
+      stamp('day-stamp', d.activity.cachedAt);
+    } else {
+      const w = await api(`/api/time/week?start=${dayDate}`);
+      $('day-date').textContent = `${fmtDay(w.start)} – ${fmtDay(w.end)}`;
+      $('day-total').textContent = `${fmtMinutes(w.minutes)} clocked this week`;
+      myDays = w.days;
+      renderCalendar($('day-cal'), w.days.map(d => ({
+        key: d.date, label: fmtDay(d.date).split(' ')[0], sub: d.date.slice(5).replace('-', '/'),
+        date: d.date, shifts: d.shifts, hours: d.activity.hours, notes: d.notes
+      })), { editable: true });
+      stamp('day-stamp', w.days[0]?.activity.cachedAt);
+    }
   } catch (e) {
-    $('day-hours').innerHTML = `<p class="empty">${escapeHtml(e.message)}</p>`;
+    $('day-cal').innerHTML = `<p class="empty">${escapeHtml(e.message)}</p>`;
   }
+}
+
+function stamp(id, cachedAt) {
+  if (!cachedAt) return;
+  const mins = Math.round((Date.now() - new Date(cachedAt).getTime()) / 60000);
+  $(id).textContent = `Tracker activity updated ${mins < 1 ? 'just now' : `${mins} min ago`}`;
 }
 
 // Which hours a set of ServiceTitan shifts covers on this Arizona day.
@@ -177,55 +287,74 @@ function coveredHours(shifts, date) {
   return covered;
 }
 
-function renderDay(day) {
-  const { shifts, activity, minutesTotal } = day;
+// ─── Hour detail ───────────────────────────────────────────────────────────
 
-  $('day-sessions').innerHTML = shifts.length
-    ? shifts.map(s => `
-        <div class="session">
-          <div class="range">${fmtTime(s.started_at)} – ${s.ended_at ? fmtTime(s.ended_at) : 'still clocked in'}</div>
-          ${s.timesheet_code ? `<div class="job">${escapeHtml(s.timesheet_code)}</div>` : ''}
-        </div>`).join('') + `<div class="stamp">${fmtMinutes(minutesTotal)} total</div>`
-    : '<div class="session"><div class="quiet">No ServiceTitan clock-in for this day.</div></div>';
+let openHour = null;
 
-  // Hours you were clocked in, plus any hour with tracked activity — a forgotten
-  // clock-in should still show its work rather than hiding it.
-  const covered = coveredHours(shifts, day.date);
-  const rows = activity.hours.filter(h => covered.has(h.hour) || h.total > 0);
-
-  $('day-hours').innerHTML = rows.length
-    ? rows.map(h => renderHour(h, covered.has(h.hour))).join('')
-    : '<p class="empty">Nothing here yet for this day.</p>';
-
-  if (activity.cachedAt) {
-    const mins = Math.round((Date.now() - new Date(activity.cachedAt).getTime()) / 60000);
-    $('day-stamp').textContent = `Tracker activity updated ${mins < 1 ? 'just now' : `${mins} min ago`}`;
-  }
-}
-
-function renderHour(h, clockedIn) {
-  const chips = Object.entries(h.metrics)
+function chipsFor(hour) {
+  return Object.entries(hour?.metrics || {})
     .filter(([, n]) => n > 0)
     .map(([k, n]) => `<span class="chip"><b>${n}</b> ${METRIC_LABELS[k]}</span>`)
     .join('');
+}
 
-  const body = chips
-    ? `<div class="chips">${chips}</div>`
-    : `<div class="quiet">No tracked activity this hour.</div>`;
+function openHourModal({ date, hour, day, editable, person }) {
+  const h = day.activity.hours[hour];
+  const chips = chipsFor(h);
+  openHour = editable ? { date, hour } : null;
 
-  return `
-    <div class="hour${clockedIn ? '' : ' outside'}">
-      <div class="h">${fmtHour(h.hour)}</div>
-      <div class="body">
-        ${clockedIn ? '' : '<div class="tag">Not clocked in</div>'}
-        ${body}
-      </div>
-    </div>`;
+  $('hour-title').textContent = `${fmtHour(hour)} · ${fmtDay(date)}`;
+  $('hour-detail').innerHTML =
+    (person ? `<div class="who">${escapeHtml(person)}</div>` : '') +
+    (chips ? `<div class="chips">${chips}</div>`
+           : '<div class="quiet">No tracked activity this hour.</div>') +
+    (day.notes?.[hour] && !editable ? `<div class="note">${escapeHtml(day.notes[hour])}</div>` : '');
+
+  const note = day.notes?.[hour] || '';
+  $('hour-note').value = note;
+  // Managers read notes; the person whose hour it is writes them.
+  $('hour-note').hidden = $('hour-note-label').hidden = !editable;
+  $('hour-save').hidden = !editable;
+  $('hour-delete').hidden = !editable || !note;
+  $('hour-error').hidden = true;
+  $('hour-modal').hidden = false;
+  if (editable) $('hour-note').focus();
+}
+
+async function saveNote() {
+  if (!openHour) return;
+  const note = $('hour-note').value.trim();
+  $('hour-save').disabled = true;
+  try {
+    if (!note) {
+      $('hour-error').textContent = 'Write something, or press Delete to clear it.';
+      $('hour-error').hidden = false;
+      return;
+    }
+    await api('/api/time/notes', { method: 'PUT', body: JSON.stringify({ ...openHour, note }) });
+    $('hour-modal').hidden = true;
+    loadDay();
+  } catch (e) {
+    $('hour-error').textContent = e.message;
+    $('hour-error').hidden = false;
+  } finally {
+    $('hour-save').disabled = false;
+  }
+}
+
+async function deleteNote() {
+  if (!openHour) return;
+  try {
+    await api('/api/time/notes', { method: 'DELETE', body: JSON.stringify(openHour) });
+    $('hour-modal').hidden = true;
+    loadDay();
+  } catch (e) {
+    $('hour-error').textContent = e.message;
+    $('hour-error').hidden = false;
+  }
 }
 
 // ─── Team ──────────────────────────────────────────────────────────────────
-
-const SHIFT_HOURS = Array.from({ length: 15 }, (_, i) => i + 5);   // 5 AM – 7 PM
 
 // Hours silently reading zero is indistinguishable from everyone taking a day off,
 // so a broken sync has to say so on the screen the manager actually looks at.
@@ -242,94 +371,48 @@ async function renderSyncBanner() {
 }
 
 async function loadTeam() {
-  $('team-grid').innerHTML = '<p class="empty">Loading…</p>';
+  $('team-cal').innerHTML = '<p class="empty">Loading…</p>';
   $('team-stamp').textContent = '';
   renderSyncBanner();
-  document.querySelectorAll('.seg button').forEach(b => {
+  document.querySelectorAll('#team .seg button').forEach(b => {
     b.classList.toggle('active', b.id === `seg-${teamMode}`);
   });
   $('team-next').disabled = teamDate >= azTodayStr();
+  $('team-picker').hidden = teamMode !== 'week';
 
   try {
     if (teamMode === 'day') {
       const data = await api(`/api/manager/day?date=${teamDate}`);
       $('team-range').textContent = teamDate === azTodayStr() ? 'Today' : fmtDay(teamDate);
-      renderTeamDay(data);
+      teamDay = data;
+      // Only people with something that day — 25 empty columns is not a coverage board.
+      const shown = data.people.filter(p => p.shifts.length || p.hours.some(h => h.total));
+      renderCalendar($('team-cal'), shown.map(p => ({
+        key: p.person,
+        label: p.person.split(' ')[0],
+        sub: p.minutes ? fmtMinutes(p.minutes) : '—',
+        date: data.date,
+        shifts: p.shifts,
+        hours: p.hours,
+        notes: p.notes
+      })));
+      stamp('team-stamp', data.cachedAt);
     } else {
-      const data = await api(`/api/manager/week?start=${teamDate}`);
+      const data = await api(`/api/manager/person-week?start=${teamDate}&person=${encodeURIComponent(teamPerson || '')}`);
+      teamPerson = data.person;
+      teamWeek = data;
       $('team-range').textContent = `${fmtDay(data.start)} – ${fmtDay(data.end)}`;
-      renderTeamWeek(data);
+      $('team-person').innerHTML = data.team
+        .map(n => `<option${n === data.person ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
+      renderCalendar($('team-cal'), data.days.map(d => ({
+        key: d.date, label: fmtDay(d.date).split(' ')[0], sub: d.date.slice(5).replace('-', '/'),
+        date: d.date, shifts: d.shifts, hours: d.activity.hours, notes: d.notes
+      })));
+      stamp('team-stamp', data.days[0]?.activity.cachedAt);
     }
   } catch (e) {
-    $('team-grid').innerHTML = `<p class="empty">${escapeHtml(e.message)}</p>`;
+    $('team-cal').innerHTML = `<p class="empty">${escapeHtml(e.message)}</p>`;
   }
-}
-
-function renderTeamDay(data) {
-  const rows = data.people.map(p => {
-    const covered = coveredHours(p.shifts, data.date);
-    const byHour = Object.fromEntries(p.hours.map(h => [h.hour, h.total]));
-    const strip = SHIFT_HOURS.map(h => {
-      const n = byHour[h] || 0;
-      const on = covered.has(h);
-      // Activity with no shift under it is worth a manager's eye; a quiet clocked
-      // hour is not, so only the first gets called out. Someone with no punches at
-      // all is a missing-data problem, not 15 separate missed hours — leave it plain.
-      const cls = on ? 'on' : (n > 0 && p.shifts.length ? 'orphan' : 'off');
-      return `<td class="cell ${cls}" title="${fmtHour(h)}">${n || ''}</td>`;
-    }).join('');
-
-    const total = Object.values(p.activity).reduce((a, b) => a + b, 0);
-    return `
-      <tr>
-        <th class="who">${escapeHtml(p.person)}${p.openShift ? '<span class="warn" title="No clock-out">•</span>' : ''}</th>
-        <td class="num">${p.minutes ? fmtMinutes(p.minutes) : '—'}</td>
-        <td class="num">${total || '—'}</td>
-        ${strip}
-      </tr>`;
-  }).join('');
-
-  $('team-grid').innerHTML = `
-    <table class="grid">
-      <thead>
-        <tr>
-          <th class="who">Person</th><th class="num">Clocked</th><th class="num">Activity</th>
-          ${SHIFT_HOURS.map(h => `<th class="cell">${h % 12 === 0 ? 12 : h % 12}</th>`).join('')}
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>`;
-
-  if (data.cachedAt) {
-    const mins = Math.round((Date.now() - new Date(data.cachedAt).getTime()) / 60000);
-    $('team-stamp').textContent = `Tracker activity updated ${mins < 1 ? 'just now' : `${mins} min ago`}`;
-  }
-}
-
-function renderTeamWeek(data) {
-  const rows = data.people.map(p => `
-    <tr>
-      <th class="who">${escapeHtml(p.person)}</th>
-      ${p.cells.map(c => `
-        <td class="cell ${c.minutes ? 'on' : 'off'}">
-          ${c.minutes ? fmtMinutes(c.minutes) : '—'}
-          <span class="sub">${c.activity || ''}</span>
-          ${c.openShift ? '<span class="warn" title="No clock-out">•</span>' : ''}
-        </td>`).join('')}
-      <td class="num">${p.minutes ? fmtMinutes(p.minutes) : '—'}</td>
-    </tr>`).join('');
-
-  $('team-grid').innerHTML = `
-    <table class="grid week">
-      <thead>
-        <tr>
-          <th class="who">Person</th>
-          ${data.dates.map(d => `<th class="cell">${fmtDay(d)}</th>`).join('')}
-          <th class="num">Total</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>`;
 }
 
 function escapeHtml(s) {
@@ -340,7 +423,8 @@ function escapeHtml(s) {
 
 async function start() {
   $('tab-team').hidden = !me?.isManager;
-  showView('day');
+  // A manager opens on the team, not on their own timesheet.
+  showView(me?.isManager ? 'team' : 'day');
 }
 
 $('login-user').addEventListener('change', onUserPick);
@@ -356,12 +440,14 @@ $('signout').addEventListener('click', async () => {
   showLogin();
 });
 
-$('day-prev').addEventListener('click', () => { dayDate = shiftDate(dayDate, -1); loadDay(); });
+$('day-prev').addEventListener('click', () => { dayDate = shiftDate(dayDate, mineMode === 'day' ? -1 : -7); loadDay(); });
 $('day-next').addEventListener('click', () => {
   if (dayDate >= azTodayStr()) return;
-  dayDate = shiftDate(dayDate, 1);
+  dayDate = shiftDate(dayDate, mineMode === 'day' ? 1 : 7);
   loadDay();
 });
+$('mine-day').addEventListener('click', () => { mineMode = 'day'; loadDay(); });
+$('mine-week').addEventListener('click', () => { mineMode = 'week'; loadDay(); });
 
 $('team-prev').addEventListener('click', () => { teamDate = shiftDate(teamDate, teamMode === 'day' ? -1 : -7); loadTeam(); });
 $('team-next').addEventListener('click', () => {
@@ -371,6 +457,35 @@ $('team-next').addEventListener('click', () => {
 });
 $('seg-day').addEventListener('click', () => { teamMode = 'day'; loadTeam(); });
 $('seg-week').addEventListener('click', () => { teamMode = 'week'; loadTeam(); });
+$('team-person').addEventListener('change', e => { teamPerson = e.target.value; loadTeam(); });
+
+// One listener per screen rather than per cell — the calendar redraws constantly.
+$('day-cal').addEventListener('click', e => {
+  const cel = e.target.closest('.cel');
+  if (!cel) return;
+  const day = myDays.find(d => d.date === cel.dataset.col);
+  if (day) openHourModal({ date: day.date, hour: Number(cel.dataset.hour), day, editable: true });
+});
+
+$('team-cal').addEventListener('click', e => {
+  const cel = e.target.closest('.cel');
+  if (!cel) return;
+  if (teamMode === 'day') {
+    const p = teamDay?.people.find(x => x.person === cel.dataset.col);
+    // The coverage board carries hour totals, not per-metric detail.
+    if (p) openHourModal({
+      date: teamDay.date, hour: Number(cel.dataset.hour), person: p.person, editable: false,
+      day: { notes: p.notes, activity: { hours: p.hours.map(h => ({ ...h, metrics: null })) } }
+    });
+  } else {
+    const day = teamWeek?.days.find(d => d.date === cel.dataset.col);
+    if (day) openHourModal({ date: day.date, hour: Number(cel.dataset.hour), day, editable: false, person: teamWeek.person });
+  }
+});
+
+$('hour-cancel').addEventListener('click', () => { $('hour-modal').hidden = true; });
+$('hour-save').addEventListener('click', saveNote);
+$('hour-delete').addEventListener('click', deleteNote);
 
 document.querySelectorAll('.tabs button').forEach(b => {
   b.addEventListener('click', () => showView(b.dataset.view));

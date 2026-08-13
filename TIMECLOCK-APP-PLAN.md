@@ -1,7 +1,7 @@
 # Timeclock App — Design & Data Reference
 
-**Status:** Phase 2 built (ServiceTitan hours + My Day + manager day/week). Approvals,
-manual tasks, and export not started.
+**Status:** Phase 3 built (ServiceTitan hours, calendar day/week views, manager coverage
+board, hourly notes). Approvals and export not started.
 **Date:** 2026-08-07, updated 2026-08-12
 
 > **⚠ 2026-08-12 — the design changed at its root.** The original spec had people clock in
@@ -388,8 +388,11 @@ time_st_shifts  st_id (PK), st_employee_id, person_name, started_at, ended_at,
 
 time_sync_state key (PK), cursor, last_run_at, last_error
 
-time_tasks      id, username, person_name, work_date, hour (0-23),
-                description, job_number, job_id, minutes, created_at
+time_notes      id, username, person_name, work_date, hour (0-23), note,
+                created_at, updated_at, UNIQUE (username, work_date, hour)
+                -- built 2026-08-13 in place of the planned time_tasks: one free-text
+                -- note per hour, no minutes or job number. Written only by the person
+                -- whose hour it is; the username comes from the session, never the body.
 
 time_approvals  id, person_name, period_type ('day'|'week'), period_start, period_end,
                 approved_by, approved_at, status, note
@@ -412,11 +415,36 @@ Per house style: add DDL **at the end of `initDB()`**, using `CREATE TABLE IF NO
 | POST | `/api/auth/login` | first call sets the PIN, later calls check it; issues the cookie |
 | POST | `/api/auth/logout` | clear the cookie |
 | GET | `/api/me` | current session's person |
-| GET | `/api/time/day?person=&date=` | my ST shifts + hourly auto activity |
-| GET | `/api/manager/day?date=` | **manager** — every person's shifts, minutes, hourly activity |
-| GET | `/api/manager/week?start=` | **manager** — Sunday-start grid, 7 cells + totals per person |
+| GET | `/api/time/day?date=` | my ST shifts + hourly activity + my notes |
+| GET | `/api/time/week?start=` | the same, seven Sunday-start days |
+| PUT | `/api/time/notes` | `{date, hour, note}` — own hours only, upserts |
+| DELETE | `/api/time/notes` | `{date, hour}` |
+| GET | `/api/manager/day?date=` | **manager** — every person's shifts, minutes, hourly activity, notes |
+| GET | `/api/manager/person-week?person=&start=` | **manager** — one person's week, plus the roster for the picker |
 | GET | `/api/manager/sync-state` | **manager** — last sync run and error, drives the banner |
-| POST/PATCH/DELETE | `/api/time/tasks` | manual per-hour entries *(not built)* |
+
+### 3.4 The calendar
+
+Day, week, and the team coverage board are **one renderer** (`renderCalendar()` in
+[public/app.js](public/app.js)) — a 24-hour axis with a set of columns beside it, where a
+column is either a date or a person:
+
+| View | Columns | Editable |
+|---|---|---|
+| My Calendar — Day | one date | yes, notes |
+| My Calendar — Week | seven dates | yes, notes |
+| Team — Day (coverage board) | one per person with something that day | read-only |
+| Team — Week | seven dates for one selected person | read-only |
+
+**The axis is a full 24 hours**, scrolled to the first punch. Punches in this tenant run from
+00:00 to 23:00 and 56 exceed 12 hours, so a 6am–6pm window silently crops real work.
+
+**Blocks never cross midnight** — ServiceTitan auto-closes at 00:00, so `blockOf()` clamps at
+the day edge and never has to split. An open punch draws to *now* on today and to a short stub
+on a past day, where running it to now would invent days of work.
+
+**Managers land on Team**, everyone else on My Calendar (`start()` in
+[public/app.js](public/app.js)).
 | POST | `/api/time/approve` | approve a day or a week |
 | GET | `/api/time/export?from=&to=&format=csv` | weekly detail + summary |
 

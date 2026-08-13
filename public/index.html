@@ -30,7 +30,7 @@
     </div>
   </section>
 
-  <!-- My Day -->
+  <!-- My Calendar -->
   <section id="day" class="screen" hidden>
     <header class="bar">
       <span id="day-who"></span>
@@ -41,13 +41,17 @@
       <span id="day-date"></span>
       <button id="day-next" class="link">›</button>
     </header>
+    <div class="seg">
+      <button id="mine-day" class="active">Day</button>
+      <button id="mine-week">Week</button>
+    </div>
 
     <div class="day-body">
-      <div id="day-sessions" class="sessions"></div>
-      <div id="day-hours" class="hours"></div>
+      <p class="total" id="day-total"></p>
+      <div id="day-cal"></div>
       <p class="framing">
         A blank hour is not an idle hour. Meetings, training, one long call, and work done
-        directly in ServiceTitan never show up here.
+        directly in ServiceTitan never show up here — tap an hour to add what you did.
       </p>
       <p class="stamp" id="day-stamp"></p>
     </div>
@@ -64,10 +68,13 @@
       <button id="seg-day" class="active">Day</button>
       <button id="seg-week">Week</button>
     </div>
+    <div class="picker" id="team-picker" hidden>
+      <select id="team-person"></select>
+    </div>
 
     <div class="team-body">
       <p id="team-banner" class="banner" hidden></p>
-      <div id="team-grid" class="grid-wrap"></div>
+      <div id="team-cal"></div>
       <p class="framing">
         Hours come from ServiceTitan. Activity is what the tracker happened to see — a quiet
         hour is not an idle one, so read it as context, never as a score.
@@ -76,8 +83,24 @@
     </div>
   </section>
 
+  <!-- Hour detail / note -->
+  <div id="hour-modal" class="overlay" hidden>
+    <div class="modal">
+      <h2 id="hour-title"></h2>
+      <div id="hour-detail" class="hour-detail"></div>
+      <label for="hour-note" id="hour-note-label">What were you doing?</label>
+      <textarea id="hour-note" rows="3" placeholder="Anything the system wouldn't have recorded"></textarea>
+      <p class="error" id="hour-error" hidden></p>
+      <div class="modal-actions">
+        <button id="hour-delete" class="ghost">Delete</button>
+        <button id="hour-cancel" class="ghost">Close</button>
+        <button id="hour-save" class="primary">Save</button>
+      </div>
+    </div>
+  </div>
+
   <nav id="tabs" class="tabs" hidden>
-    <button data-view="day" class="active">My Day</button>
+    <button data-view="day" class="active">My Calendar</button>
     <button data-view="team" id="tab-team" hidden>Team</button>
   </nav>
 
