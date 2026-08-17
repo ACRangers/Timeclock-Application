@@ -97,8 +97,8 @@ hour — it could be a meeting, training, one long difficult call, or work done 
 ServiceTitan. Always frame a gap as **"add what you did"**, never "you did nothing".
 
 **Points exist anyway — John asked for them on 2026-08-13.** `POINTS` in `server.js` weights
-each metric (inbound 2, outbound 0.5, job created 2, dispatched 3, estimate 6, invoice 3,
-audit 1) and `pointsOf()` is the only place scoring happens, so a team-list total can never
+each metric (inbound 2, outbound 0.5, job created 2, dispatched 3, estimate 6, invoice 2,
+audit 2) and `pointsOf()` is the only place scoring happens, so a team-list total can never
 disagree with the hour it came from. A weight is an instruction about what to do more of — an
 estimate at 6 is worth twelve outbound calls, and people will notice — so treat a change to
 these numbers as a change to what the office is being asked to do. Points are a total, never a

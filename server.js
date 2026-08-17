@@ -352,8 +352,8 @@ const POINTS = {
   jobsCreated:    2,
   jobsDispatched: 3,
   estSent:        6,
-  audits:         1,
-  invoices:       3
+  audits:         2,
+  invoices:       2
 };
 
 const pointsOf = counts => METRICS.reduce((n, m) => n + (counts[m] || 0) * POINTS[m], 0);
