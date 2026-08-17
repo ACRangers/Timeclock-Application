@@ -77,6 +77,13 @@ dispatch and billing data. Tables this app **reads**: `scoreboard_cache`, `track
 - **Zero hours is ambiguous.** A missing scope gives `403 Scope validation failed`, which
   looks exactly like nobody worked. The error lands in `time_sync_state.last_error` and the
   Team screen banners it — keep that link intact if you touch the sync.
+- **A sync that stops running reports nothing at all.** This happened: the timer died on
+  2026-08-13 and hours silently froze for four days with `last_error` null the whole time.
+  Three defences now, keep all three — `setInterval` is armed **before** the first run so a
+  boot failure cannot take it with it; `nudgeSync()` kicks a background sync when a manager
+  loads a stale day, since requests are the only heartbeat a sleeping container has; and the
+  Team banner calls out staleness, not just errors. `POST /api/manager/resync` is the manual
+  way back, pulling a week by **creation** date so a wrong cursor cannot hide it.
 - **The activity feed is only as fresh as the tracker.** The tracker refreshes
   `scoreboard_cache` every 10 minutes and owns that row — we never write it, so the current
   hour can lag by that much. The UI says when it was last updated.
@@ -90,13 +97,12 @@ hour — it could be a meeting, training, one long difficult call, or work done 
 ServiceTitan. Always frame a gap as **"add what you did"**, never "you did nothing".
 
 **Points exist anyway — John asked for them on 2026-08-13.** `POINTS` in `server.js` weights
-each metric (inbound 2, outbound 0.5, job created 2, dispatched 3, estimate 6, invoice 4,
-audit 0) and `pointsOf()` is the only place scoring happens, so a team-list total can never
-disagree with the hour it came from. Two things to keep in view when touching this: a weight
-is an instruction about what to do more of — an estimate at 6 is worth twelve outbound calls,
-and people will notice — and **audits score 0**, which is most of what Michael Molina does.
-Points are a total, never a ranking: do not sort the team by them or colour anyone red for a
-low score.
+each metric (inbound 2, outbound 0.5, job created 2, dispatched 3, estimate 6, invoice 3,
+audit 1) and `pointsOf()` is the only place scoring happens, so a team-list total can never
+disagree with the hour it came from. A weight is an instruction about what to do more of — an
+estimate at 6 is worth twelve outbound calls, and people will notice — so treat a change to
+these numbers as a change to what the office is being asked to do. Points are a total, never a
+ranking: do not sort the team by them or colour anyone red for a low score.
 
 **One calendar renderer, not three.** `renderCalendar()` draws a 24-hour axis with a set of
 columns; a column is a date (day/week) or a person (the team coverage board). Adding a fourth

@@ -578,17 +578,41 @@ async function deleteNote() {
 // ─── Team ──────────────────────────────────────────────────────────────────
 
 // Hours silently reading zero is indistinguishable from everyone taking a day off,
-// so a broken sync has to say so on the screen the manager actually looks at.
+// so a broken sync has to say so on the screen the manager actually looks at. A sync
+// that simply stopped running says nothing at all, which is how it went unnoticed for
+// four days — so staleness is banner-worthy even with no error.
 async function renderSyncBanner() {
   try {
     const s = await api('/api/manager/sync-state');
-    $('team-banner').hidden = !s.last_error;
+    const stale = s.last_run_at && (Date.now() - new Date(s.last_run_at).getTime()) > 30 * 60000;
+    $('team-banner').hidden = !s.last_error && !stale;
     if (s.last_error) {
       $('team-banner').textContent = /403|scope/i.test(s.last_error)
-        ? 'ServiceTitan hours are not syncing: the API app is missing the payroll timesheet permission. Activity below is still accurate; clocked hours will read zero until that is granted.'
+        ? 'ServiceTitan hours are not syncing: the API app is missing the timesheet permission. Activity below is still accurate; clocked hours will read zero until that is granted.'
         : `ServiceTitan hours are not syncing: ${s.last_error}`;
+    } else if (stale) {
+      const mins = Math.round((Date.now() - new Date(s.last_run_at).getTime()) / 60000);
+      const ago = mins > 120 ? `${Math.round(mins / 60)} hours` : `${mins} minutes`;
+      $('team-banner').textContent =
+        `Hours last synced ${ago} ago. Activity below is live; clocked hours may be behind — press Refresh hours.`;
     }
   } catch { $('team-banner').hidden = true; }
+}
+
+async function resyncWeek() {
+  const btn = $('team-resync');
+  const was = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Refreshing…';
+  try {
+    const r = await api('/api/manager/resync', { method: 'POST', body: JSON.stringify({ start: teamDate }) });
+    btn.textContent = `${r.saved} punches`;
+    await loadTeam();
+  } catch (e) {
+    btn.textContent = e.message.slice(0, 40);
+  } finally {
+    setTimeout(() => { btn.textContent = was; btn.disabled = false; }, 2500);
+  }
 }
 
 // The team screen is a list you tap into, not a wall of columns.
@@ -664,6 +688,7 @@ async function signOut() {
 }
 $('signout').addEventListener('click', signOut);
 $('team-signout').addEventListener('click', signOut);
+$('team-resync').addEventListener('click', resyncWeek);
 
 $('day-prev').addEventListener('click', () => { dayDate = shiftDate(dayDate, mineMode === 'day' ? -1 : -7); loadDay(); });
 $('day-next').addEventListener('click', () => {

@@ -344,19 +344,16 @@ async function getMaster() {
 
 const METRICS = ['callsIn', 'callsOut', 'jobsCreated', 'jobsDispatched', 'estSent', 'audits', 'invoices'];
 
-// Weights set by John, 2026-08-13. Scored here and only here, so a total on the team
-// list can never disagree with the hour it came from.
-//
-// audits is 0 because it was not in the list given. That is a real decision, not an
-// oversight to inherit quietly: it is most of what Michael Molina does.
+// Weights set by John, revised 2026-08-13. Scored here and only here, so a total on
+// the team list can never disagree with the hour it came from.
 const POINTS = {
   callsIn:        2,
   callsOut:       0.5,
   jobsCreated:    2,
   jobsDispatched: 3,
   estSent:        6,
-  audits:         0,
-  invoices:       4
+  audits:         1,
+  invoices:       3
 };
 
 const pointsOf = counts => METRICS.reduce((n, m) => n + (counts[m] || 0) * POINTS[m], 0);
@@ -550,13 +547,23 @@ const SYNC_KEY = 'st_timesheet_activities';
 const SYNC_MINUTES = 10;
 const BACKFILL_DAYS = 60;
 
-async function syncShifts() {
-  if (!pool || !stReady()) return;
+// One sync at a time. Without this a manual refresh landing on top of the timer
+// would have both walking the cursor.
+let syncing = false;
+
+// `from` forces a pull by creation date over an explicit window, ignoring the cursor
+// — that is what makes a manual refresh able to recover a stalled or wrong cursor.
+async function syncShifts({ from = null } = {}) {
+  if (!pool || !stReady() || syncing) return { skipped: true };
+  syncing = true;
   const runStart = new Date();
-  const { rows } = await pool.query('SELECT cursor FROM time_sync_state WHERE key = $1', [SYNC_KEY]);
-  const since = rows[0]?.cursor;
+  let since = null;
 
   try {
+    // Inside the try: a failure reading the cursor used to reject out of the boot
+    // callback before setInterval ran, which killed the sync until a restart.
+    const { rows } = await pool.query('SELECT cursor FROM time_sync_state WHERE key = $1', [SYNC_KEY]);
+    since = from ? null : rows[0]?.cursor;
     const [emp, types] = await Promise.all([getEmployeeMap(), getActivityTypes()]);
     // There is no shift-date filter on this endpoint, only created*/modified*, so the
     // two jobs need two different queries.
@@ -571,9 +578,10 @@ async function syncShifts() {
     //
     // Either way sort matches the filter. The default id order walks from the oldest
     // record forward, so a cap lands thousands of rows short of today.
+    const createdFrom = from || new Date(Date.now() - BACKFILL_DAYS * 86400000).toISOString();
     const window = since
       ? `sort=ModifiedOn&modifiedOnOrAfter=${since.toISOString()}`
-      : `sort=CreatedOn&createdOnOrAfter=${new Date(Date.now() - BACKFILL_DAYS * 86400000).toISOString()}`;
+      : `sort=CreatedOn&createdOnOrAfter=${createdFrom}`;
 
     const { items: all, capped } = await getAllPages(
       `/timesheets/v2/tenant/${tid()}/activities?pageSize=200&${window}`
@@ -625,17 +633,41 @@ async function syncShifts() {
                 (capped ? ` — backlog, resuming at ${cursor.toISOString()}` : ''));
 
     // A backlog would otherwise take one 10-minute tick per 10k records to clear.
-    if (capped) setTimeout(syncShifts, 5000);
+    if (capped) setTimeout(() => syncShifts(), 5000);
+    return { saved: items.length, scanned: all.length, capped };
   } catch (e) {
     const msg = e.response ? `${e.response.status} ${e.response.data?.title || ''}`.trim() : e.message;
-    await pool.query(
-      `INSERT INTO time_sync_state (key, cursor, last_run_at, last_error)
-       VALUES ($1, NULL, now(), $2)
-       ON CONFLICT (key) DO UPDATE SET last_run_at = now(), last_error = EXCLUDED.last_error`,
-      [SYNC_KEY, msg]
-    );
+    try {
+      await pool.query(
+        `INSERT INTO time_sync_state (key, cursor, last_run_at, last_error)
+         VALUES ($1, NULL, now(), $2)
+         ON CONFLICT (key) DO UPDATE SET last_run_at = now(), last_error = EXCLUDED.last_error`,
+        [SYNC_KEY, msg]
+      );
+    } catch { /* the database is the thing that failed; the log is all that is left */ }
     console.error('[ST SYNC]', msg);
+    return { error: msg };
+  } finally {
+    syncing = false;
   }
+}
+
+// The timer stopped firing once already and nothing noticed for four days, so the
+// screens that read this data also nudge it: if the last run is stale, kick one off
+// in the background. Requests are the one heartbeat we can rely on.
+const STALE_MINUTES = 12;
+let lastKick = 0;
+
+async function nudgeSync() {
+  if (Date.now() - lastKick < 60000) return;
+  lastKick = Date.now();
+  try {
+    const { rows } = await pool.query('SELECT last_run_at FROM time_sync_state WHERE key = $1', [SYNC_KEY]);
+    const last = rows[0]?.last_run_at;
+    if (!last || Date.now() - new Date(last).getTime() > STALE_MINUTES * 60000) {
+      syncShifts().catch(e => console.error('[ST SYNC] nudge failed:', e.message));
+    }
+  } catch { /* never let a stale check break the page that triggered it */ }
 }
 
 // Every punch that starts on the given Arizona day, all people. Callers filter by
@@ -830,6 +862,7 @@ function teamStatus(roles, name) {
 
 app.get('/api/manager/day', requireAuth, requireManager, async (req, res) => {
   const date = req.query.date || azToday();
+  nudgeSync();
   try {
     const bundle = await dayBundle(date);
     const roles = teamRoles(bundle.ctx.blob);
@@ -902,6 +935,22 @@ app.get('/api/manager/person-week', requireAuth, requireManager, async (req, res
   }
 });
 
+// Pull a window again by creation date, cursor be damned. This is the way back from
+// a stalled or wrong cursor without a redeploy.
+app.post('/api/manager/resync', requireAuth, requireManager, async (req, res) => {
+  const start = weekDates(req.body?.start || azToday())[0];
+  try {
+    // Arizona midnight on the Sunday, so a week means that week.
+    const result = await syncShifts({ from: `${start}T07:00:00.000Z` });
+    if (result.skipped) return res.status(409).json({ error: 'A sync is already running' });
+    if (result.error) return res.status(502).json({ error: result.error });
+    await audit('sync', null, 'manual_resync', null, { start, ...result }, req.user.name);
+    res.json({ start, ...result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/manager/sync-state', requireAuth, requireManager, async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM time_sync_state WHERE key = $1', [SYNC_KEY]);
   res.json(rows[0] || { key: SYNC_KEY, cursor: null, last_run_at: null, last_error: 'never run' });
@@ -923,6 +972,8 @@ app.listen(PORT, async () => {
   console.log(`AC Rangers Timeclock running on http://localhost:${PORT}`);
   await initDB();
   if (!stReady()) return console.warn('No ServiceTitan credentials — clocked hours will not sync');
-  await syncShifts();
-  setInterval(syncShifts, SYNC_MINUTES * 60000);
+  // Arm the timer BEFORE the first run. The other way round, a throw on boot took
+  // the recurring sync with it and hours quietly stopped updating for four days.
+  setInterval(() => syncShifts().catch(e => console.error('[ST SYNC] tick failed:', e.message)), SYNC_MINUTES * 60000);
+  syncShifts().catch(e => console.error('[ST SYNC] first run failed:', e.message));
 });
