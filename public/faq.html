@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading the Timeclock</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+  :root {
+    --paper:   #FBFBFD;
+    --surface: #FFFFFF;
+    --ink:     #12171F;
+    --muted:   #5C6472;
+    --faint:   #8A93A3;
+    --rule:    #E3E6EC;
+    --accent:  #1D4ED8;
+    --accent-soft: #EAF0FF;
+    --amber:   #B45309;
+    --amber-soft: #FDF3E3;
+    --green:   #15803D;
+    --red:     #B91C1C;
+    --red-soft: #FCEEEC;
+
+    --m-in:   #0284C7;
+    --m-out:  #4F46E5;
+    --m-job:  #15803D;
+    --m-disp: #0F766E;
+    --m-est:  #A21CAF;
+    --m-aud:  #C2410C;
+    --m-inv:  #92610A;
+
+    --measure: 68ch;
+    --shadow: 0 1px 2px rgba(18, 23, 31, .05), 0 8px 24px -16px rgba(18, 23, 31, .18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:   #0E1218;
+      --surface: #161C25;
+      --ink:     #E9EDF4;
+      --muted:   #A2ACBC;
+      --faint:   #6F7A8B;
+      --rule:    #29313D;
+      --accent:  #7BA3FF;
+      --accent-soft: #1B2740;
+      --amber:   #E9A23B;
+      --amber-soft: #33270F;
+      --green:   #4ADE80;
+      --red:     #F87171;
+      --red-soft: #341B1B;
+
+      --m-in:   #38BDF8;
+      --m-out:  #8B8BFA;
+      --m-job:  #4ADE80;
+      --m-disp: #2DD4BF;
+      --m-est:  #E879F9;
+      --m-aud:  #FB923C;
+      --m-inv:  #E3B341;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.7);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:   #0E1218;
+    --surface: #161C25;
+    --ink:     #E9EDF4;
+    --muted:   #A2ACBC;
+    --faint:   #6F7A8B;
+    --rule:    #29313D;
+    --accent:  #7BA3FF;
+    --accent-soft: #1B2740;
+    --amber:   #E9A23B;
+    --amber-soft: #33270F;
+    --green:   #4ADE80;
+    --red:     #F87171;
+    --red-soft: #341B1B;
+
+    --m-in:   #38BDF8;
+    --m-out:  #8B8BFA;
+    --m-job:  #4ADE80;
+    --m-disp: #2DD4BF;
+    --m-est:  #E879F9;
+    --m-aud:  #FB923C;
+    --m-inv:  #E3B341;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.7);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3 { font-family: Archivo, 'Helvetica Neue', Arial, sans-serif; }
+  .mono, td.n, .pts, .val { font-family: 'IBM Plex Mono', ui-monospace, Menlo, monospace; }
+
+  a { color: var(--accent); text-underline-offset: 3px; }
+
+  /* Masthead */
+  .mast { border-bottom: 1px solid var(--rule); background: var(--surface); }
+  .mast-in {
+    max-width: 1180px; margin: 0 auto; padding: 44px 32px 36px;
+    display: grid; grid-template-columns: 34px 1fr; gap: 0 22px;
+  }
+
+  /* Hour ticks, echoing the calendar gutter the app is built on. */
+  .ticks { display: flex; flex-direction: column; padding-top: 8px; }
+  .ticks span {
+    display: block; height: 13px; border-top: 1px solid var(--rule);
+    font-family: 'IBM Plex Mono', monospace; font-size: 7px; color: var(--faint);
+    text-align: right; padding-right: 5px; line-height: 1;
+  }
+  .ticks span:nth-child(3n+1) { border-top-color: var(--accent); }
+
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--accent);
+    margin: 0 0 14px;
+  }
+  h1 {
+    font-size: clamp(34px, 5.2vw, 52px); line-height: 1.04; font-weight: 700;
+    letter-spacing: -.02em; margin: 0 0 16px; text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 20px; line-height: 1.55; color: var(--muted);
+    margin: 0 0 26px; max-width: 56ch;
+  }
+  .access {
+    display: flex; flex-wrap: wrap; gap: 10px 28px; align-items: baseline;
+    padding-top: 20px; border-top: 1px solid var(--rule);
+    font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--muted);
+  }
+  .access b { color: var(--ink); font-weight: 600; }
+
+  /* Frame */
+  .frame { max-width: 1180px; margin: 0 auto; padding: 0 32px 96px; display: grid; }
+  @media (min-width: 1000px) {
+    .frame { grid-template-columns: 210px minmax(0, 1fr); gap: 56px; }
+  }
+
+  nav.toc { display: none; }
+  @media (min-width: 1000px) {
+    nav.toc {
+      display: block; position: sticky; top: 0; align-self: start;
+      padding-top: 56px; max-height: 100vh; overflow-y: auto;
+    }
+  }
+  .toc-h {
+    font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--faint); margin: 0 0 12px;
+  }
+  .toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+  .toc a {
+    display: block; padding: 4px 0 4px 12px; border-left: 2px solid var(--rule);
+    font-family: Archivo, sans-serif; font-size: 13.5px; line-height: 1.35;
+    color: var(--muted); text-decoration: none;
+  }
+  .toc a:hover, .toc a:focus-visible { color: var(--accent); border-left-color: var(--accent); }
+
+  main { padding-top: 56px; max-width: var(--measure); }
+  section + section { margin-top: 60px; }
+
+  h2 {
+    font-size: 13px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 26px; padding-bottom: 10px;
+    border-bottom: 2px solid var(--accent);
+  }
+  h3 {
+    font-size: 22px; font-weight: 600; letter-spacing: -.01em; line-height: 1.3;
+    margin: 34px 0 10px; text-wrap: balance;
+  }
+  section > h3:first-of-type { margin-top: 0; }
+  p { margin: 0 0 14px; }
+  p:last-child { margin-bottom: 0; }
+  strong { font-weight: 600; }
+
+  ul.plain { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 7px; }
+
+  /* Devices */
+  .note {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    padding: 14px 18px; margin: 20px 0; font-size: 15.5px; line-height: 1.6;
+  }
+  .note.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 4px;
+    box-shadow: var(--shadow); padding: 20px 22px; margin: 22px 0;
+  }
+  .card-h {
+    font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--faint); margin: 0 0 14px;
+  }
+  .weights { display: flex; flex-wrap: wrap; gap: 6px; }
+
+  .scroll { overflow-x: auto; margin: 22px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; }
+  th {
+    font-family: Archivo, sans-serif; font-size: 11px; font-weight: 600;
+    letter-spacing: .08em; text-transform: uppercase; color: var(--faint);
+    text-align: left; padding: 0 14px 8px 0; border-bottom: 1px solid var(--rule); white-space: nowrap;
+  }
+  td { padding: 10px 14px 10px 0; border-bottom: 1px solid var(--rule); vertical-align: baseline; }
+  th.n, td.n { text-align: right; padding-right: 0; }
+  td.n { font-variant-numeric: tabular-nums; font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+
+  .pill {
+    display: inline-block; padding: 2px 10px; border-radius: 999px;
+    font-family: Archivo, sans-serif; font-size: 12px; font-weight: 600;
+    color: #FFFFFF; white-space: nowrap;
+  }
+  .p-in   { background: var(--m-in); }
+  .p-out  { background: var(--m-out); }
+  .p-job  { background: var(--m-job); }
+  .p-disp { background: var(--m-disp); }
+  .p-est  { background: var(--m-est); }
+  .p-aud  { background: var(--m-aud); }
+  .p-inv  { background: var(--m-inv); }
+
+  .tag {
+    display: inline-block; padding: 1px 7px; border-radius: 3px;
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600;
+  }
+  .t-ot   { color: var(--amber); background: var(--amber-soft); }
+  .t-flag { color: var(--red); background: var(--red-soft); }
+  .t-note { color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
+  .t-pts  { color: var(--accent); background: var(--accent-soft); }
+  .t-meal { color: var(--faint); background: color-mix(in srgb, var(--faint) 16%, transparent); }
+
+  .path {
+    font-family: 'IBM Plex Mono', monospace; font-size: 13.5px;
+    color: var(--ink); background: var(--accent-soft);
+    padding: 2px 8px; border-radius: 3px; white-space: nowrap;
+  }
+
+  /* A team row in the app's own shape */
+  .row-demo {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    border: 1px solid var(--rule); border-radius: 4px; background: var(--surface);
+    padding: 12px 16px; margin: 20px 0 16px; font-family: Archivo, sans-serif;
+  }
+  .row-demo .who { flex: 1; min-width: 140px; font-weight: 600; font-size: 15px; }
+  .row-demo .who em { display: block; font-style: normal; font-size: 11px; font-weight: 500; color: var(--faint); }
+  .row-demo .val { font-size: 13px; color: var(--muted); white-space: nowrap; }
+  .row-demo .pts { font-weight: 600; color: var(--accent); font-size: 15px; }
+  .row-demo .chev { color: var(--faint); }
+
+  .callouts { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 0; padding: 0; list-style: none; }
+  .callouts li {
+    display: grid; grid-template-columns: 116px 1fr; gap: 14px; align-items: baseline;
+    font-size: 15px; line-height: 1.55;
+  }
+  .callouts li > :first-child { justify-self: start; }
+  @media (max-width: 560px) { .callouts li { grid-template-columns: 1fr; gap: 4px; } }
+
+  footer {
+    max-width: 1180px; margin: 0 auto; padding: 26px 32px 60px;
+    border-top: 1px solid var(--rule);
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--faint);
+    display: flex; flex-wrap: wrap; gap: 8px 24px;
+  }
+
+  .grp { margin: 22px 0; }
+  .grp-h {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    font-family: Archivo, sans-serif; font-size: 15px; font-weight: 600;
+    margin: 0 0 4px;
+  }
+  .grp-h .badge {
+    font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 600;
+    letter-spacing: .1em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 3px;
+  }
+  .b-manual { color: var(--amber); background: var(--amber-soft); }
+  .b-auto   { color: var(--accent); background: var(--accent-soft); }
+  .grp-sub { font-size: 15px; color: var(--muted); margin: 0 0 12px; }
+  .grp ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 15.5px; }
+  .grp ul strong { font-weight: 600; }
+
+  .back {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+    color: var(--muted); text-decoration: none; margin-bottom: 18px;
+  }
+  .back:hover, .back:focus-visible { color: var(--accent); }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+  @media (max-width: 640px) {
+    body { font-size: 16px; }
+    .mast-in { padding: 32px 20px 28px; grid-template-columns: 1fr; }
+    .ticks { display: none; }
+    .frame { padding: 0 20px 64px; }
+    main { padding-top: 36px; }
+    footer { padding: 24px 20px 48px; }
+  }
+</style>
+
+</head>
+<body>
+<header class="mast">
+  <div class="mast-in">
+    <div class="ticks" aria-hidden="true">
+      <span>6</span><span></span><span></span>
+      <span>9</span><span></span><span></span>
+      <span>12</span><span></span><span></span>
+      <span>3</span><span></span><span></span>
+      <span>6</span><span></span><span></span>
+    </div>
+    <div>
+      <a class="back" href="/">&lsaquo; Back to the app</a>
+      <p class="eyebrow">AC Rangers &middot; Manager reference</p>
+      <h1>Reading the Timeclock</h1>
+      <p class="standfirst">
+        The app puts two things side by side that have never been in the same place before:
+        the hours ServiceTitan recorded, and the work the Tracker saw during them. Here is how
+        to navigate it, where every number comes from, and what it is actually good for.
+      </p>
+      <div class="access">
+        <span><b>timeclock-application-production.up.railway.app</b></span>
+        <span>Sign in <b>ACRManager</b> &middot; PIN <b>2026</b></span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+  <nav class="toc" aria-label="Contents">
+    <p class="toc-h">Contents</p>
+    <ol>
+      <li><a href="#around">Getting around</a></li>
+      <li><a href="#tracked">Where the numbers come from</a></li>
+      <li><a href="#reading">Reading a person's day</a></li>
+      <li><a href="#points">Points</a></li>
+      <li><a href="#using">What to use it for</a></li>
+      <li><a href="#limits">What it will not do</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <section id="around">
+      <h2>Getting around</h2>
+
+      <h3>What do I see when I sign in?</h3>
+      <p>
+        The <strong>Team</strong> list &mdash; thirteen people, one day at a time, today by
+        default. Every row is one person, and every row opens.
+      </p>
+
+      <div class="row-demo">
+        <span class="who">Kenia Simkins<em>Red Ranger</em></span>
+        <span class="val">7h 29m</span>
+        <span class="tag t-ot">+1h 12m OT</span>
+        <span class="val">68</span>
+        <span class="pts">136 pts</span>
+        <span class="chev">&rsaquo;</span>
+      </div>
+
+      <ul class="callouts">
+        <li><span class="val">7h 29m</span><span>Hours clocked in ServiceTitan. <strong>off</strong> means no punch that day.</span></li>
+        <li><span class="tag t-ot">+1h 12m OT</span><span>Time past eight hours. Only appears when there is some.</span></li>
+        <li><span class="val">68</span><span>Tracked actions &mdash; calls, dispatches, estimates, invoices, audits.</span></li>
+        <li><span class="tag t-pts">136 pts</span><span>Those actions, weighted. See <a href="#points">Points</a>.</span></li>
+        <li><span class="tag t-flag">&bull; red dot</span><span>A missed clock-out on a past day.</span></li>
+      </ul>
+
+      <h3>How do I look at one person?</h3>
+      <p>
+        Tap their row. You get their calendar with a <span class="path">Day</span> /
+        <span class="path">Week</span> switch, and <span class="path">&lsaquo; Team</span>
+        brings you back.
+      </p>
+      <p>
+        <strong>Day</strong> names everything that happened, placed at the minute it happened.
+        <strong>Week</strong> shows seven columns at once, with a Sun&ndash;Sat strip underneath
+        to choose which day&rsquo;s detail you are reading.
+      </p>
+
+      <h3>How do I get to a specific date?</h3>
+      <p>
+        <strong>Click the date in the header.</strong> It opens a date picker, so reaching last
+        Tuesday does not mean pressing the arrow eleven times. The arrows still step a day or a
+        week at a time, and future dates are greyed out because there is nothing there yet.
+      </p>
+
+      <h3>Why is my own row not in the list?</h3>
+      <p>
+        A manager reviewing the team should not be reviewing themselves, so whoever is signed in
+        is left out. On a personal account your own hours live under
+        <span class="path">My Calendar</span>. The shared <strong>ACRManager</strong> login has
+        no timesheet of its own, so it has no My Calendar tab at all.
+      </p>
+
+      <h3>What does Refresh hours do?</h3>
+      <p>
+        Re-pulls the whole displayed week from ServiceTitan straight away instead of waiting for
+        the next automatic sync, and tells you how many punches it found. Use it when someone has
+        just clocked in, or has just fixed a punch, and you want to see it now.
+      </p>
+    </section>
+
+    <section id="tracked">
+      <h2>Where the numbers come from</h2>
+
+      <p>
+        Nothing here is typed by hand. The app reads two systems that were already running and
+        lines them up on one clock.
+      </p>
+
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>What</th><th>Comes from</th><th>How current</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Clocked hours</strong></td>
+              <td>ServiceTitan timesheets &mdash; the punches your team already makes</td>
+              <td>Every 10 minutes</td>
+            </tr>
+            <tr>
+              <td><strong>Activity</strong></td>
+              <td>The HVAC Tracker&rsquo;s Dashboard data</td>
+              <td>As fresh as the Tracker, roughly 10 minutes</td>
+            </tr>
+            <tr>
+              <td><strong>Notes</strong></td>
+              <td>Written by the person whose hour it is</td>
+              <td>Immediately</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note">
+        <p>
+          <strong>Nobody clocks in here.</strong> This app cannot start, stop or edit a punch.
+          ServiceTitan stays the system of record for hours &mdash; a wrong punch gets fixed
+          there and appears here at the next sync.
+        </p>
+      </div>
+
+      <h3>What counts as activity?</h3>
+      <p>Seven things, each keeping its own colour everywhere it appears:</p>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Activity</th><th>Recorded by</th><th class="n">Points</th></tr></thead>
+          <tbody>
+            <tr><td><span class="pill p-est">Estimate Sent</span></td><td>Clicking <strong>Sent</strong> in the Tracker</td><td class="n">6</td></tr>
+            <tr><td><span class="pill p-disp">Dispatched</span></td><td>Automatic</td><td class="n">3</td></tr>
+            <tr><td><span class="pill p-in">Inbound</span></td><td>Automatic</td><td class="n">2</td></tr>
+            <tr><td><span class="pill p-job">Job Created</span></td><td>Automatic</td><td class="n">2</td></tr>
+            <tr><td><span class="pill p-aud">Audit</span></td><td>Clicking <strong>Audit</strong> in the Tracker</td><td class="n">2</td></tr>
+            <tr><td><span class="pill p-inv">Invoice</span></td><td>Clicking <strong>Audit</strong> in the Tracker</td><td class="n">2</td></tr>
+            <tr><td><span class="pill p-out">Outbound</span></td><td>Automatic</td><td class="n">0.5</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+
+      <h3>How does each activity get recorded?</h3>
+      <p>
+        Two different ways, and the difference changes how you should read a gap.
+      </p>
+
+      <div class="grp">
+        <p class="grp-h"><span class="badge b-manual">Someone clicks it</span></p>
+        <p class="grp-sub">Recorded only when a person marks it in the ACRangers Tracker.</p>
+        <ul>
+          <li><strong>Estimate Sent</strong> &mdash; clicking <strong>Sent</strong> on the Estimates page.</li>
+          <li><strong>Audit</strong> and <strong>Invoice</strong> &mdash; clicking <strong>Audit</strong> on the Invoices page.</li>
+        </ul>
+      </div>
+
+      <div class="grp">
+        <p class="grp-h"><span class="badge b-auto">Recorded automatically</span></p>
+        <p class="grp-sub">Captured from ServiceTitan as the work happens. Nobody has to remember anything.</p>
+        <ul>
+          <li><strong>Inbound</strong> and <strong>Outbound</strong> calls</li>
+          <li><strong>Job Created</strong></li>
+          <li><strong>Dispatched</strong></li>
+        </ul>
+      </div>
+
+      <div class="note warn">
+        <p>
+          <strong>A missing estimate and a missing call mean different things.</strong> The
+          automatic four are there whether or not anyone thought about the Tracker. The three
+          that need a click only exist if someone made it &mdash; so a quiet stretch on estimates
+          or audits may mean the work did not happen, or may mean it happened and was never
+          marked. Worth asking which, before reading anything into it.
+        </p>
+      </div>
+
+      <h3>Whose hours am I seeing?</h3>
+      <p>
+        The thirteen people the Tracker tags with a role &mdash; Ranger, Rangerette, Red Ranger
+        and so on &mdash; plus <strong>Sarah Lewis</strong>, who clocks in but has no Tracker
+        record. Change someone&rsquo;s role in the Tracker and this list follows automatically.
+      </p>
+      <p>
+        Two absences are worth knowing about: <strong>Bradley Rogers</strong> and
+        <strong>Ivan Rodriguez</strong> are set up in ServiceTitan as <em>technicians</em>, so
+        their punches file with the field crew where this app cannot reach them.
+      </p>
+
+      <h3>What time zone?</h3>
+      <p>
+        Arizona, always &mdash; UTC&minus;7, no daylight saving. An hour on the calendar is an
+        Arizona hour, whatever your own computer thinks the time is.
+      </p>
+
+      <h3>How do I know the data is current?</h3>
+      <p>
+        A red banner appears at the top of the Team list if the sync has failed <em>or</em> has
+        simply gone quiet. That second case is the one that matters: hours which stop updating
+        look exactly like a team that stopped working, so the app says so rather than letting
+        the zeros speak for themselves. When you see it, press <strong>Refresh hours</strong>.
+      </p>
+    </section>
+
+    <section id="reading">
+      <h2>Reading a person&rsquo;s day</h2>
+
+      <p>
+        The day view is a 24-hour calendar. Down the left runs a coloured spine &mdash; that is
+        the clocked shift. Beside it, every tracked action sits in the ten-minute slot it
+        happened in, with everything from the same ten minutes shown side by side.
+      </p>
+
+      <div class="card">
+        <p class="card-h">The colour key</p>
+        <ul class="callouts">
+          <li><span class="tag t-pts">blue spine</span><span>Clocked in &mdash; the first eight hours of the day.</span></li>
+          <li><span class="tag t-ot">yellow spine</span><span>Overtime. The yellow <em>is</em> the overtime, so its length is how much.</span></li>
+          <li><span class="tag t-meal">grey</span><span>A meal break. Drawn, but never counted toward hours or overtime.</span></li>
+          <li><span class="tag t-flag">red outline</span><span>Activity in an hour with no punch under it &mdash; work happening off the clock.</span></li>
+          <li><span class="tag t-note">green dot</span><span>The person wrote a note on that hour.</span></li>
+        </ul>
+      </div>
+
+      <h3>Why are the ten-minute rows the point?</h3>
+      <p>
+        Because density is the story. Four outbound calls at 1:38, 1:40, 1:40 and 1:44 are a
+        four-minute burst, not an hour of steady work &mdash; stacked down the hour they would
+        look identical to work spread across it. Side by side in one row, you can see what
+        actually happened.
+      </p>
+
+      <h3>What is the Day Report underneath?</h3>
+      <p>
+        The same day written out hour by hour: the tally for each hour, then every action named
+        with its time, then any note the person left. In Week view the Sun&ndash;Sat strip picks
+        which day it describes, and a collapsible <strong>Week summary</strong> at the top gives
+        you the whole week&rsquo;s hours, overtime, points and totals in one place.
+      </p>
+
+      <div class="note warn">
+        <p>
+          <strong>An empty hour is not an idle hour.</strong> The Tracker sees calls, estimates,
+          dispatches, invoices and audits. It does not see meetings, training, one long difficult
+          call, coaching someone at the next desk, or work done directly in ServiceTitan. A blank
+          hour is a question, not an answer.
+        </p>
+      </div>
+    </section>
+
+    <section id="points">
+      <h2>Points</h2>
+
+      <p>
+        Every tracked action carries a weight, and points appear on each hour, each day, each
+        week, and each row of the team list. They are a <strong>total, not a ranking</strong>
+        &mdash; the list stays in alphabetical order and nobody is coloured for a low score.
+      </p>
+
+      <div class="card">
+        <p class="card-h">Current weights</p>
+        <div class="weights">
+          <span class="pill p-est">Estimate 6</span>
+          <span class="pill p-disp">Dispatched 3</span>
+          <span class="pill p-in">Inbound 2</span>
+          <span class="pill p-job">Job created 2</span>
+          <span class="pill p-aud">Audit 2</span>
+          <span class="pill p-inv">Invoice 2</span>
+          <span class="pill p-out">Outbound 0.5</span>
+        </div>
+      </div>
+
+      <h3>What the weights are really saying</h3>
+      <p>
+        A weight is an instruction. At 6 against 0.5, <strong>one estimate is worth twelve
+        outbound calls</strong> &mdash; so a day of steady phone work will score below a day of
+        estimates, by design. That is the sharpest ratio in the set, and the first number to
+        revisit if the scoreboard starts pulling people somewhere you did not intend.
+      </p>
+      <p>
+        Read points as <em>what kind of work this was</em>, not <em>how hard someone tried</em>.
+        Two people on the same total may have had completely different days.
+      </p>
+    </section>
+
+    <section id="using">
+      <h2>What to use it for</h2>
+
+      <h3>The morning coverage check</h3>
+      <p>
+        Open the Team list on today. Who is on, who is off, who started late. Thirteen rows,
+        about five seconds &mdash; this is the thing the app is fastest at.
+      </p>
+
+      <h3>Catching missed clock-outs before payroll</h3>
+      <p>
+        A red dot on a past day means someone never clocked out. Left alone it becomes a wrong
+        number on a timesheet. Step back through the week and clear them while people still
+        remember the day; the fix happens in ServiceTitan and shows up here at the next sync.
+      </p>
+
+      <h3>Seeing overtime while you can still act on it</h3>
+      <p>
+        Overtime appears the moment it happens, not at the end of the pay period. Mid-week you
+        can still move work around; on Friday afternoon you cannot. Open Week view and the
+        summary carries the running total per person.
+      </p>
+
+      <h3>Finding work that happens off the clock</h3>
+      <p>
+        Red-outlined hours are activity with no punch underneath &mdash; someone answering calls
+        before they clock in, or after they clock out. That usually means unpaid time rather than
+        stolen time. Worth a conversation either way: either the punches need to move, or someone
+        is quietly working for free.
+      </p>
+
+      <h3>Preparing a one-to-one</h3>
+      <p>
+        Open the person, switch to Week, expand the summary. You have their hours, their overtime,
+        what they actually did each day, and anything they wrote about it &mdash; instead of an
+        impression. The specifics are the useful part: <em>Tuesday you sent nine estimates</em>
+        lands very differently from <em>you seem busy lately</em>.
+      </p>
+
+      <h3>Asking about a quiet stretch, well</h3>
+      <p>
+        If an afternoon looks empty, the app has told you the Tracker saw nothing. It has not
+        told you that nothing happened. Ask what they were working on &mdash; often the answer is
+        a meeting, a training session, or one call that ran an hour. If they add it as a note, the
+        record is better next time.
+      </p>
+    </section>
+
+    <section id="limits">
+      <h2>What it will not do</h2>
+      <ul class="plain">
+        <li><strong>Approve time.</strong> There is no approval step yet. This is for reviewing, not signing off.</li>
+        <li><strong>Export.</strong> No CSV, no download. Payroll still comes out of ServiceTitan.</li>
+        <li><strong>Edit hours.</strong> Read-only by design; punch corrections happen in ServiceTitan.</li>
+        <li><strong>Let you write someone&rsquo;s note.</strong> Notes belong to the person whose hour it is. You can read them, not author them.</li>
+        <li><strong>Show the whole team&rsquo;s week at once.</strong> Week view is one person at a time.</li>
+        <li><strong>Cover field technicians.</strong> Different work, different data &mdash; deliberately out of scope.</li>
+      </ul>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <span>AC Rangers Timeclock</span>
+  <span>Hours: ServiceTitan &middot; Activity: HVAC Tracker</span>
+  <span>All times Arizona (UTC&minus;7)</span>
+</footer>
+</body>
+</html>

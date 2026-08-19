@@ -83,6 +83,8 @@ button { font-family: inherit; }
   background: none; border: 0; color: var(--accent);
   font-size: 14px; font-weight: 600; cursor: pointer; padding: 4px 8px;
 }
+/* The FAQ is an anchor sitting among buttons — match them. */
+a.link { text-decoration: none; display: inline-flex; align-items: center; white-space: nowrap; }
 
 /* Holds the middle of a bar open so a lone button stays on its own side. */
 .spacer { flex: 1; }
