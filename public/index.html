@@ -15,15 +15,14 @@
       <h1>Activity Tracker</h1>
       <p class="sub">AC Rangers</p>
 
-      <label for="login-user">Who are you?</label>
-      <select id="login-user"><option value="">Select your name</option></select>
+      <label for="login-user">Username</label>
+      <input id="login-user" type="text" autocomplete="username" autocapitalize="none"
+             spellcheck="false" placeholder="Your AC Rangers username">
 
-      <div id="pin-block" hidden>
-        <label for="login-pin" id="pin-label">Enter your PIN</label>
-        <input id="login-pin" type="password" inputmode="numeric" pattern="\d*" maxlength="4"
-               autocomplete="off" placeholder="••••">
-        <p class="hint" id="pin-hint"></p>
-      </div>
+      <label for="login-pin">PIN</label>
+      <input id="login-pin" type="password" inputmode="numeric" pattern="\d*" maxlength="4"
+             autocomplete="current-password" placeholder="••••">
+      <p class="hint">First time signing in? Enter the PIN you want and it becomes yours.</p>
 
       <p class="error" id="login-error" hidden></p>
       <button id="login-btn" class="primary" disabled>Sign in</button>

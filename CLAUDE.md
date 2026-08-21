@@ -133,6 +133,8 @@ on the manager's own row rather than being refused, because the body is never tr
 with before/after. It is cheap now and is the only thing that lets this become payroll-grade
 later without a rewrite.
 
+**The sign-in page names nobody.** It asks for a typed username, not a dropdown, and `/api/auth/users` is gone — a roster endpoint on an unauthenticated page is a staff list anyone can fetch. A wrong PIN and a username that does not exist return the same 401, so the page cannot be used to work out who has an account. Keep both properties if you touch sign-in.
+
 **Identity is server-side.** Each person has a bcrypt-hashed 4-digit PIN in `time_users` and a
 signed httpOnly session cookie; the server derives who is calling from the session and never
 trusts a person name in a request body. This was a deliberate change from the plan's original

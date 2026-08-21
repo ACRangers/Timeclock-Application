@@ -269,28 +269,13 @@ function requireAuth(req, res, next) {
 
 // ─── Auth routes ──────────────────────────────────────────────────────────────
 
-app.get('/api/auth/users', async (req, res) => {
-  try {
-    const { rows } = pool
-      ? await pool.query('SELECT username FROM time_users')
-      : { rows: [] };
-    const registered = new Set(rows.map(r => r.username));
-    const users = Object.entries(USERNAME_TO_NAME)
-      .map(([username, name]) => ({ username, name, registered: registered.has(username) }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    res.json(users);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
 // First sign-in for a username sets its PIN; after that the PIN is required.
 app.post('/api/auth/login', async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'No database connection' });
   const username = resolveUsername(req.body?.username);
   const pin = String(req.body?.pin || '');
-  if (!username) return res.status(400).json({ error: 'Unknown user' });
   if (!/^\d{4}$/.test(pin)) return res.status(400).json({ error: 'PIN must be 4 digits' });
+  if (!username) return res.status(401).json({ error: 'Wrong username or PIN' });
 
   try {
     const name = USERNAME_TO_NAME[username];
@@ -307,7 +292,7 @@ app.post('/api/auth/login', async (req, res) => {
       await audit('user', null, 'pin_set', null, { username, person_name: name }, name);
     } else {
       const ok = await bcrypt.compare(pin, rows[0].pin_hash);
-      if (!ok) return res.status(401).json({ error: 'Wrong PIN' });
+      if (!ok) return res.status(401).json({ error: 'Wrong username or PIN' });
       await pool.query(
         'UPDATE time_users SET last_login_at = now(), is_manager = $2 WHERE username = $1',
         [username, MANAGERS.has(username)]

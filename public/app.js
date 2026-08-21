@@ -111,41 +111,12 @@ function showView(name) {
 function showLogin() {
   me = null;
   showView('login');
-  loadUsers();
 }
 
 // ─── Sign in ───────────────────────────────────────────────────────────────
 
-async function loadUsers() {
-  try {
-    const users = await api('/api/auth/users');
-    $('login-user').innerHTML = '<option value="">Select your name</option>' +
-      users.map(u => `<option value="${u.username}" data-registered="${u.registered}">${u.name}</option>`).join('');
-  } catch (e) {
-    $('login-error').textContent = e.message;
-    $('login-error').hidden = false;
-  }
-}
-
-function onUserPick() {
-  const opt = $('login-user').selectedOptions[0];
-  const picked = !!$('login-user').value;
-  $('pin-block').hidden = !picked;
-  $('login-btn').disabled = true;
-  $('login-pin').value = '';
-  $('login-error').hidden = true;
-
-  if (!picked) return;
-  const registered = opt.dataset.registered === 'true';
-  $('pin-label').textContent = registered ? 'Enter your PIN' : 'Create a 4-digit PIN';
-  $('pin-hint').textContent = registered
-    ? ''
-    : 'This is your first sign-in. Pick a 4-digit PIN — you will use it every time.';
-  $('login-pin').focus();
-}
-
 async function doLogin() {
-  const username = $('login-user').value;
+  const username = $('login-user').value.trim();
   const pin = $('login-pin').value;
   $('login-error').hidden = true;
   $('login-btn').disabled = true;
@@ -157,8 +128,8 @@ async function doLogin() {
   } catch (e) {
     $('login-error').textContent = e.message;
     $('login-error').hidden = false;
-    $('login-btn').disabled = false;
     $('login-pin').value = '';
+    readyToSignIn();
     $('login-pin').focus();
   }
 }
@@ -819,11 +790,15 @@ async function start() {
   showView(me?.isManager ? 'team' : 'day');
 }
 
-$('login-user').addEventListener('change', onUserPick);
+const readyToSignIn = () => {
+  $('login-btn').disabled = !($('login-user').value.trim() && $('login-pin').value.length === 4);
+};
+$('login-user').addEventListener('input', readyToSignIn);
 $('login-pin').addEventListener('input', e => {
   e.target.value = e.target.value.replace(/\D/g, '');
-  $('login-btn').disabled = e.target.value.length !== 4;
+  readyToSignIn();
 });
+$('login-user').addEventListener('keydown', e => { if (e.key === 'Enter') $('login-pin').focus(); });
 $('login-pin').addEventListener('keydown', e => { if (e.key === 'Enter' && !$('login-btn').disabled) doLogin(); });
 $('login-btn').addEventListener('click', doLogin);
 
