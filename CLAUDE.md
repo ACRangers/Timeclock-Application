@@ -96,6 +96,7 @@ dispatch and billing data. Tables this app **reads**: `scoreboard_cache`, `track
   `callDetails`, falling back to midday: bucketing `added_at` would have `push()` drop the
   event entirely, since its AZ date would not match the day being built. Warranty points are
   **on top of** the call's own — the call still scores as a call.
+- **The team list is derived from the tracker blob, so a missing blob emptied it.** `teamRoles()` reads the role tags out of `scoreboard_cache`; when that row went missing the list fell through to `EXTRA_TEAM` alone — one person — and read as a team that had gone home. With no blob the manager views now show the whole roster and banner the missing feed, since hours are unaffected by it.
 - **The activity feed is only as fresh as the tracker.** The tracker refreshes
   `scoreboard_cache` every 10 minutes and owns that row — we never write it, so the current
   hour can lag by that much. The UI says when it was last updated.

@@ -775,6 +775,16 @@ async function loadTeam() {
     $('team-range').textContent = teamDate === azTodayStr() ? 'Today' : fmtDay(teamDate);
     teamDay = data;
 
+    // Zero activity for everyone is either a very quiet day or a missing feed, and
+    // only one of those is worth acting on.
+    if (data.activityAvailable === false) {
+      $('team-banner').hidden = false;
+      $('team-banner').textContent =
+        'The tracker has no activity data right now, so every activity count and point ' +
+        'below reads zero. Clocked hours are still accurate. This comes from the HVAC ' +
+        'Tracker rebuilding its scoreboard — it usually returns on its own within ten minutes.';
+    }
+
     // Everyone on the list shows, including people with no hours — that is the part
     // that says who was off.
     $('team-list').innerHTML = data.people.length

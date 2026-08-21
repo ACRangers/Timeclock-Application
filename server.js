@@ -923,10 +923,13 @@ app.get('/api/manager/day', requireAuth, requireManager, async (req, res) => {
   nudgeSync();
   try {
     const bundle = await dayBundle(date);
+    // No scoreboard row means no role tags, and filtering on them would empty the
+    // list. Hours are unaffected, so show everyone and say the activity is missing.
+    const haveActivity = !!bundle.ctx.blob;
     const roles = teamRoles(bundle.ctx.blob);
     const people = teamFor(req.user.name).map(name => {
       const { onTeam, role } = teamStatus(roles, name);
-      if (!onTeam) return null;
+      if (haveActivity && !onTeam) return null;
       const d = personOn(bundle, name);
       return {
         person: name,
@@ -941,7 +944,7 @@ app.get('/api/manager/day', requireAuth, requireManager, async (req, res) => {
         hours: d.activity.hours.map(h => ({ hour: h.hour, total: h.total, points: h.points }))
       };
     }).filter(Boolean).sort((a, b) => a.person.localeCompare(b.person));
-    res.json({ date, cachedAt: bundle.ctx.cachedAt, people });
+    res.json({ date, cachedAt: bundle.ctx.cachedAt, activityAvailable: haveActivity, people });
   } catch (e) {
     console.error('[MGR DAY]', e.message);
     res.status(500).json({ error: e.message });
@@ -1003,9 +1006,10 @@ app.get('/api/manager/person-day', requireAuth, requireManager, async (req, res)
 // does not need a second round trip.
 app.get('/api/manager/person-week', requireAuth, requireManager, async (req, res) => {
   try {
-    const roles = teamRoles((await getMaster()).blob);
+    const { blob } = await getMaster();
+    const roles = teamRoles(blob);
     const team = teamFor(req.user.name)
-      .filter(n => teamStatus(roles, n).onTeam)
+      .filter(n => !blob || teamStatus(roles, n).onTeam)
       .sort((a, b) => a.localeCompare(b));
     const person = team.find(n => namesMatch(n, req.query.person || '')) || team[0];
     if (!person) return res.status(404).json({ error: 'Unknown person' });
