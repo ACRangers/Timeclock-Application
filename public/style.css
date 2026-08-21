@@ -318,8 +318,10 @@ select, input, textarea {
   z-index: 3; pointer-events: none;
 }
 
+/* Absolute positioning belongs to the calendar lane, NOT to every pill. A pill dropped
+   into a normal flow container (report rows, hour modal) must lay out inline like anything
+   else — otherwise it anchors to some far-off ancestor and floats over the page. */
 .pill {
-  position: absolute; z-index: 3;
   height: 15px; line-height: 15px; padding: 0 8px;
   border-radius: 999px; box-sizing: border-box;
   background: #0ea5e9; color: #fff;
@@ -328,7 +330,7 @@ select, input, textarea {
 }
 /* Columns within a ten-minute row: the inline width is the share of the row, and a
    transparent right border eats into it to leave the gap between neighbours. */
-.lane .pill { border-right: 3px solid transparent; background-clip: padding-box; }
+.lane .pill { position: absolute; z-index: 3; border-right: 3px solid transparent; background-clip: padding-box; }
 .pill b { font-weight: 700; }
 .pill.callsOut       { background: #6366f1; }
 .pill.jobsCreated    { background: #16a34a; }
