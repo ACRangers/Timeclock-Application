@@ -597,8 +597,9 @@ const syncRunning = () => syncStartedAt > 0 && !syncStuck();
 // `from` forces a pull by creation date over an explicit window, ignoring the cursor
 // — that is what makes a manual refresh able to recover a stalled or wrong cursor.
 async function syncShifts({ from = null } = {}) {
-  if (!pool || !stReady()) return { skipped: true };
-  if (syncRunning()) return { skipped: true };
+  if (!pool) return { skipped: 'no-database' };
+  if (!stReady()) return { skipped: 'no-credentials' };
+  if (syncRunning()) return { skipped: 'running' };
   if (syncStuck()) console.error(`[ST SYNC] previous run stuck for ${Math.round((Date.now() - syncStartedAt) / 60000)} min — starting a new one`);
   syncStartedAt = Date.now();
   const runStart = new Date();
@@ -1014,6 +1015,12 @@ app.post('/api/manager/resync', requireAuth, requireManager, async (req, res) =>
   try {
     // Arizona midnight on the Sunday, so a week means that week.
     const result = await syncShifts({ from: `${start}T07:00:00.000Z` });
+    if (result.skipped === 'no-credentials') {
+      return res.status(503).json({ error: 'ServiceTitan is not connected on this server' });
+    }
+    if (result.skipped === 'no-database') {
+      return res.status(503).json({ error: 'No database connection' });
+    }
     if (result.skipped) return res.status(409).json({ error: 'A sync is already running' });
     if (result.error) return res.status(502).json({ error: result.error });
     await audit('sync', null, 'manual_resync', null, { start, ...result }, req.user.name);
@@ -1025,7 +1032,10 @@ app.post('/api/manager/resync', requireAuth, requireManager, async (req, res) =>
 
 app.get('/api/manager/sync-state', requireAuth, requireManager, async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM time_sync_state WHERE key = $1', [SYNC_KEY]);
-  res.json(rows[0] || { key: SYNC_KEY, cursor: null, last_run_at: null, last_error: 'never run' });
+  res.json({
+    ...(rows[0] || { key: SYNC_KEY, cursor: null, last_run_at: null, last_error: null }),
+    configured: stReady()
+  });
 });
 
 // A real 404 for unknown API routes, so status codes stay meaningful.

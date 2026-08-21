@@ -720,7 +720,16 @@ async function renderSyncBanner() {
   try {
     const s = await api('/api/manager/sync-state');
     const stale = s.last_run_at && (Date.now() - new Date(s.last_run_at).getTime()) > 30 * 60000;
-    $('team-banner').hidden = !s.last_error && !stale;
+    $('team-banner').hidden = s.configured !== false && !s.last_error && !stale;
+    // Not configured is not the same as behind: no amount of refreshing will help.
+    if (s.configured === false) {
+      $('team-banner').textContent =
+        'ServiceTitan is not connected on this server, so clocked hours cannot update. ' +
+        'Activity below is live. The ST_* environment variables need to be set on the service.';
+      $('team-resync').hidden = true;
+      return;
+    }
+    $('team-resync').hidden = false;
     if (s.last_error) {
       $('team-banner').textContent = /403|scope/i.test(s.last_error)
         ? 'ServiceTitan hours are not syncing: the API app is missing the timesheet permission. Activity below is still accurate; clocked hours will read zero until that is granted.'
