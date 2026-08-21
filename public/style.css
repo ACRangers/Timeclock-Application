@@ -452,6 +452,10 @@ select, input, textarea {
   border-right: 0; pointer-events: auto;
 }
 
+/* Task text is user-written and variable length, unlike the formulaic event pills —
+   let it wrap instead of ellipsing so the job number at the end stays visible. */
+.evlist .pill.task { white-space: normal; height: auto; text-overflow: clip; }
+
 .hour-detail { margin-bottom: 4px; }
 .hour-detail .who { font-weight: 600; margin-bottom: 8px; }
 .hour-detail .note {

@@ -499,8 +499,7 @@ function hourRow(h, clockedIn, notes, date, editable, withEvents = false) {
         ${clockedIn ? '' : '<div class="tag">Not clocked in</div>'}
         ${chips ? `<div class="chips">${chips}</div>` : '<div class="quiet">No tracked activity this hour.</div>'}
         ${events ? `<div class="evlist">${events}</div>` : ''}
-        ${(notes || []).map(n => `<span class="pill task ${n.category || 'other'}" data-note="${n.id}">
-             ${evText(taskEvent(n))}</span>`).join('')}
+        ${(notes || []).length ? `<div class="evlist tasks">${(notes || []).map(n => `<span class="pill task ${n.category || 'other'}" data-note="${n.id}">${evText(taskEvent(n))}</span>`).join('')}</div>` : ''}
         ${editable ? '<div class="add">+ add what you did</div>' : ''}
       </div>
     </div>`;
