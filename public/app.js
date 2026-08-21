@@ -356,6 +356,7 @@ async function loadDay() {
   $('day-who').textContent = mine ? (me?.name || '') : viewing;
   $('day-back').hidden = mine;
   $('signout').hidden = !mine;
+  $('day-resetpin').hidden = mine || !me?.isManager;
   $('day-next').disabled = dayDate >= azTodayStr();
   $('day-cal').innerHTML = '<p class="empty">Loading…</p>';
   $('day-hours').innerHTML = '';
@@ -893,6 +894,25 @@ $('team-list').addEventListener('click', e => {
   if (row) openPerson(row.dataset.person);
 });
 $('day-back').addEventListener('click', () => { viewing = null; showView('team'); });
+
+// Clearing someone's PIN so they can set a new one. Confirmed first, because they
+// cannot sign in again until they do.
+$('day-resetpin').addEventListener('click', async () => {
+  if (!viewing) return;
+  if (!confirm(`Reset ${viewing}'s PIN?\n\nThey will choose a new one the next time they sign in, and cannot sign in until they do.`)) return;
+  const btn = $('day-resetpin');
+  btn.disabled = true;
+  try {
+    const r = await api('/api/manager/reset-pin', { method: 'POST', body: JSON.stringify({ person: viewing }) });
+    alert(r.alreadyUnset
+      ? `${r.person} had no PIN set, so there was nothing to reset. They will choose one when they first sign in.`
+      : `Done. ${r.person} will choose a new PIN the next time they sign in.`);
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 // One listener per screen rather than per element — both redraw constantly.
 $('day-cal').addEventListener('click', e => {

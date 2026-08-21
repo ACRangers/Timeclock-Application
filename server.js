@@ -974,6 +974,32 @@ function weekDates(start) {
   });
 }
 
+// Clearing the row is the reset: the sign-in flow already treats an unknown person
+// as a first sign-in and asks them to choose a PIN. Nobody ever learns the old one,
+// including the manager doing the reset.
+app.post('/api/manager/reset-pin', requireAuth, requireManager, async (req, res) => {
+  const person = String(req.body?.person || '');
+  const username = Object.keys(USERNAME_TO_NAME).find(u => namesMatch(USERNAME_TO_NAME[u], person));
+  if (!username) return res.status(404).json({ error: 'Unknown person' });
+
+  // The shared manager account would be claimable by anyone until the next restart.
+  if (username === MANAGER_ONLY) {
+    return res.status(403).json({ error: 'The shared manager PIN cannot be reset here' });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      'DELETE FROM time_users WHERE username = $1 RETURNING username, person_name, created_at, last_login_at',
+      [username]
+    );
+    if (!rows.length) return res.json({ person: USERNAME_TO_NAME[username], alreadyUnset: true });
+    await audit('user', null, 'pin_reset', rows[0], null, req.user.name);
+    res.json({ person: rows[0].person_name });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // One person's day, with the full per-hour metric detail the team list omits.
 app.get('/api/manager/person-day', requireAuth, requireManager, async (req, res) => {
   const date = req.query.date || azToday();
