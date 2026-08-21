@@ -89,6 +89,13 @@ dispatch and billing data. Tables this app **reads**: `scoreboard_cache`, `track
   loads a stale day, since requests are the only heartbeat a sleeping container has; and the
   Team banner calls out staleness, not just errors. `POST /api/manager/resync` is the manual
   way back, pulling a week by **creation** date so a wrong cursor cannot hide it.
+- **Warranty is counted per job, on the day of the call.** `call_warranty_jobs` is the only
+  table needed — one row per job, so a call covering three jobs is three warranties. Report on
+  `call_date` (the Arizona date of the **call**), never `added_at`, or a Monday call tagged on
+  Wednesday lands on Wednesday. The hour comes from the call itself via `call_id` →
+  `callDetails`, falling back to midday: bucketing `added_at` would have `push()` drop the
+  event entirely, since its AZ date would not match the day being built. Warranty points are
+  **on top of** the call's own — the call still scores as a call.
 - **The activity feed is only as fresh as the tracker.** The tracker refreshes
   `scoreboard_cache` every 10 minutes and owns that row — we never write it, so the current
   hour can lag by that much. The UI says when it was last updated.
@@ -103,7 +110,7 @@ ServiceTitan. Always frame a gap as **"add what you did"**, never "you did nothi
 
 **Points exist anyway — John asked for them on 2026-08-13.** `POINTS` in `server.js` weights
 each metric (inbound 2, outbound 0.5, job created 2, dispatched 3, estimate 6, invoice 2,
-audit 2) and `pointsOf()` is the only place scoring happens, so a team-list total can never
+audit 2, warranty 1.75) and `pointsOf()` is the only place scoring happens, so a team-list total can never
 disagree with the hour it came from. A weight is an instruction about what to do more of — an
 estimate at 6 is worth twelve outbound calls, and people will notice — so treat a change to
 these numbers as a change to what the office is being asked to do. Points are a total, never a

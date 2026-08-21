@@ -31,6 +31,7 @@
     --m-est:  #A21CAF;
     --m-aud:  #C2410C;
     --m-inv:  #92610A;
+    --m-warr: #BE123C;
 
     --measure: 68ch;
     --shadow: 0 1px 2px rgba(18, 23, 31, .05), 0 8px 24px -16px rgba(18, 23, 31, .18);
@@ -59,6 +60,7 @@
       --m-est:  #E879F9;
       --m-aud:  #FB923C;
       --m-inv:  #E3B341;
+      --m-warr: #FB7185;
       --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.7);
     }
   }
@@ -85,6 +87,7 @@
     --m-est:  #E879F9;
     --m-aud:  #FB923C;
     --m-inv:  #E3B341;
+    --m-warr: #FB7185;
     --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.7);
   }
 
@@ -226,6 +229,7 @@
   .p-est  { background: var(--m-est); }
   .p-aud  { background: var(--m-aud); }
   .p-inv  { background: var(--m-inv); }
+  .p-warr { background: var(--m-warr); }
 
   .tag {
     display: inline-block; padding: 1px 7px; border-radius: 3px;
@@ -465,6 +469,7 @@
             <tr><td><span class="pill p-job">Job Created</span></td><td>Automatic</td><td class="n">2</td></tr>
             <tr><td><span class="pill p-aud">Audit</span></td><td>Clicking <strong>Audit</strong> in the Tracker</td><td class="n">2</td></tr>
             <tr><td><span class="pill p-inv">Invoice</span></td><td>Clicking <strong>Audit</strong> in the Tracker</td><td class="n">2</td></tr>
+            <tr><td><span class="pill p-warr">Warranty</span></td><td>Adding a job in <strong>My Calls</strong></td><td class="n">1.75</td></tr>
             <tr><td><span class="pill p-out">Outbound</span></td><td>Automatic</td><td class="n">0.5</td></tr>
           </tbody>
         </table>
@@ -482,6 +487,7 @@
         <ul>
           <li><strong>Estimate Sent</strong> &mdash; clicking <strong>Sent</strong> on the Estimates page.</li>
           <li><strong>Audit</strong> and <strong>Invoice</strong> &mdash; clicking <strong>Audit</strong> on the Invoices page.</li>
+          <li><strong>Warranty</strong> &mdash; adding the jobs a call was about, in <strong>My Calls</strong>. Each job counts as one.</li>
         </ul>
       </div>
 
@@ -596,6 +602,7 @@
           <span class="pill p-job">Job created 2</span>
           <span class="pill p-aud">Audit 2</span>
           <span class="pill p-inv">Invoice 2</span>
+          <span class="pill p-warr">Warranty 1.75</span>
           <span class="pill p-out">Outbound 0.5</span>
         </div>
       </div>

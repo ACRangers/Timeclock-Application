@@ -296,6 +296,7 @@ select, input, textarea {
 .pill.estSent        { background: #c026d3; }
 .pill.audits         { background: #ea580c; }
 .pill.invoices       { background: #b45309; }
+.pill.warranty       { background: #be123c; }
 
 /* ─── One person ────────────────────────────────────────────────────────── */
 

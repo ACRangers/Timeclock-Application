@@ -342,7 +342,7 @@ async function getMaster() {
   return masterCache;
 }
 
-const METRICS = ['callsIn', 'callsOut', 'jobsCreated', 'jobsDispatched', 'estSent', 'audits', 'invoices'];
+const METRICS = ['callsIn', 'callsOut', 'jobsCreated', 'jobsDispatched', 'estSent', 'audits', 'invoices', 'warranty'];
 
 // Weights set by John, revised 2026-08-13. Scored here and only here, so a total on
 // the team list can never disagree with the hour it came from.
@@ -353,7 +353,8 @@ const POINTS = {
   jobsDispatched: 3,
   estSent:        6,
   audits:         2,
-  invoices:       2
+  invoices:       2,
+  warranty:       1.75
 };
 
 const pointsOf = counts => METRICS.reduce((n, m) => n + (counts[m] || 0) * POINTS[m], 0);
@@ -361,7 +362,7 @@ const pointsOf = counts => METRICS.reduce((n, m) => n + (counts[m] || 0) * POINT
 // Everything a day needs that is the same for all 22 people, fetched once. Without
 // this a manager week view would fire 300+ queries to answer one screen.
 async function dayContext(date) {
-  const [{ blob, cachedAt }, audits, invoices] = await Promise.all([
+  const [{ blob, cachedAt }, audits, invoices, warranty] = await Promise.all([
     getMaster(),
     // Audits and invoices are daily counts only in the blob, so their hourly detail
     // comes straight from the source tables.
@@ -374,9 +375,15 @@ async function dayContext(date) {
       `SELECT invoiced_by AS person, invoiced_at AS at, job_id
          FROM invoice_tracker
         WHERE invoiced_by IS NOT NULL
-          AND (invoiced_at AT TIME ZONE 'America/Phoenix')::date = $1::date`, [date])
+          AND (invoiced_at AT TIME ZONE 'America/Phoenix')::date = $1::date`, [date]),
+    // Warranty is counted on the day the call happened — call_date — not the day it
+    // was tagged, so someone catching up on yesterday still lands in yesterday.
+    pool.query(
+      `SELECT added_by AS person, call_id, job_number, call_date
+         FROM call_warranty_jobs
+        WHERE added_by IS NOT NULL AND call_date = $1::date`, [date])
   ]);
-  return { date, blob, cachedAt, audits: audits.rows, invoices: invoices.rows };
+  return { date, blob, cachedAt, audits: audits.rows, invoices: invoices.rows, warranty: warranty.rows };
 }
 
 function activityFor(personName, date, ctx) {
@@ -384,18 +391,19 @@ function activityFor(personName, date, ctx) {
   const row = (blob?.data || []).find(r => r.name && r.name !== 'TOTAL' && namesMatch(r.name, personName));
 
   const events = [];
-  const push = (kind, ts, label) => {
+  const push = (kind, ts, label, extra) => {
     if (!ts) return;
     const { azDate, azHour } = azBucket(ts);
     if (azDate !== date) return;
-    events.push({ kind, hour: azHour, at: new Date(ts).toISOString(), label: label || null });
+    events.push({ kind, hour: azHour, at: new Date(ts).toISOString(), label: label || null, ...extra });
   };
 
   if (row) {
     (row.callDetails || []).forEach(c => {
       const outbound = (c.direction || '').toLowerCase() === 'outbound';
       push(outbound ? 'callsOut' : 'callsIn', c.createdOn,
-           c.jobNumber ? `Job #${c.jobNumber}` : (outbound ? c.to : c.from) || null);
+           c.jobNumber ? `Job #${c.jobNumber}` : (outbound ? c.to : c.from) || null,
+           c.duration ? { dur: c.duration } : null);
     });
     (row.createdJobs || []).forEach(j => push('jobsCreated', j.createdOn, j.jobNumber ? `Job #${j.jobNumber}` : null));
     // Dispatch timestamps live under bookedOn (appointment_dispatchers.dispatch_event_date)
@@ -410,6 +418,15 @@ function activityFor(personName, date, ctx) {
   ctx.invoices.filter(r => namesMatch(r.person, personName))
     .forEach(r => push('invoices', r.at, r.job_id ? `Job ${r.job_id}` : null));
 
+  // The tag carries only a date, so the hour comes from the call it was attached to.
+  // Noon is the fallback for a call too old to be in the blob — a warranty placed
+  // roughly is better than one silently dropped from the day's count.
+  const callTimes = new Map((row?.callDetails || []).map(c => [String(c.id), c.createdOn]));
+  ctx.warranty.filter(r => namesMatch(r.person, personName)).forEach(r => {
+    const at = callTimes.get(String(r.call_id)) || `${date}T19:00:00.000Z`;
+    push('warranty', at, r.job_number ? `Job #${r.job_number}` : null);
+  });
+
   const hours = Array.from({ length: 24 }, (_, h) => {
     const evs = events.filter(e => e.hour === h).sort((a, b) => new Date(a.at) - new Date(b.at));
     const metrics = {};
@@ -419,7 +436,7 @@ function activityFor(personName, date, ctx) {
       total: evs.length,
       points: pointsOf(metrics),
       metrics,
-      details: evs.map(({ kind, at, label }) => ({ kind, at, label }))
+      details: evs.map(({ kind, at, label, dur }) => ({ kind, at, label, dur }))
     };
   });
 

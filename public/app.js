@@ -10,7 +10,8 @@ const METRIC_LABELS = {
   jobsDispatched: 'dispatched',
   estSent:        'estimates sent',
   audits:         'audits',
-  invoices:       'invoices'
+  invoices:       'invoices',
+  warranty:       'warranty'
 };
 const METRIC_ORDER = Object.keys(METRIC_LABELS);
 
@@ -169,16 +170,16 @@ async function doLogin() {
 
 // A week has to fit seven columns, so its rows stay tight and show counts. A single
 // day has room to name each thing that happened, so its rows are tall enough to.
-// Each hour is six rows of ten minutes; events in the same ten minutes sit side by
-// side. Stacking them down the hour instead made a burst of four calls at 1:38 look
+// Each hour is twelve rows of five minutes; events in the same five minutes sit side
+// by side. Stacking them down the hour instead made a burst of four calls at 1:38 look
 // like work spread across the hour, which is the opposite of what happened.
 //
-// Measured over three days: a ten-minute slot holds 2 events at the median, 4 at the
-// 90th, 7 at the very most — so columns can show every one and nothing is hidden.
+// Measured over three days: a five-minute slot holds 1 event at the median, 2 at the
+// 90th, 6 at the very most — so columns can show every one and nothing is hidden.
 const HOUR_PX = 44;
-const HOUR_PX_DAY = 126;
-const SLOTS_PER_HOUR = 6;
+const SLOTS_PER_HOUR = 12;
 const PILL_PX = 17;
+const HOUR_PX_DAY = SLOTS_PER_HOUR * PILL_PX;
 
 const EVENT_LABELS = {
   callsIn:        'Inbound',
@@ -187,8 +188,17 @@ const EVENT_LABELS = {
   jobsDispatched: 'Dispatched',
   estSent:        'Estimate Sent',
   audits:         'Audit',
-  invoices:       'Invoice'
+  invoices:       'Invoice',
+  warranty:       'Warranty'
 };
+
+function fmtDur(hms) {
+  const m = /^(\d+):(\d+):(\d+)/.exec(hms || '');
+  if (!m) return '';
+  const secs = +m[1] * 3600 + +m[2] * 60 + +m[3];
+  if (!secs) return '';
+  return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+}
 
 const fmtClock = iso => new Date(iso)
   .toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Phoenix' })
@@ -245,8 +255,8 @@ function overtimeOf(shifts) {
   return Math.max(0, paid - OT_MINUTES);
 }
 
-// The row says when, to the nearest ten minutes; the columns say how much happened
-// in that ten minutes. Four calls in one slot read as four abreast, not as four
+// The row says when, to the nearest five minutes; the columns say how much happened
+// in those five minutes. Four calls in one slot read as four abreast, not as four
 // stacked down an hour they did not occupy.
 function pillsFor(hour, hourPx) {
   const band = hour.hour * hourPx;
@@ -254,7 +264,7 @@ function pillsFor(hour, hourPx) {
 
   const slots = Array.from({ length: SLOTS_PER_HOUR }, () => []);
   hour.details.forEach(ev => {
-    const slot = Math.min(SLOTS_PER_HOUR - 1, Math.floor(new Date(ev.at).getUTCMinutes() / 10));
+    const slot = Math.min(SLOTS_PER_HOUR - 1, Math.floor(new Date(ev.at).getUTCMinutes() / (60 / SLOTS_PER_HOUR)));
     slots[slot].push(ev);
   });
 
@@ -303,8 +313,8 @@ function renderCalendar(el, columns, { editable = false, detailed = false } = {}
       (col.hours || []).filter(h => h.total).flatMap(h => pillsFor(h, hourPx)).map(ev => `
         <div class="pill ${ev.kind}"
              style="top:${ev.top}px;left:${ev.left}%;width:${ev.width}%"
-             title="${EVENT_LABELS[ev.kind] || ev.kind}, ${fmtClock(ev.at)}${ev.label ? ` · ${escapeHtml(ev.label)}` : ''}">
-          <b>${EVENT_LABELS[ev.kind] || ev.kind}</b>, ${fmtClock(ev.at)}${ev.label ? ` · ${escapeHtml(ev.label)}` : ''}
+             title="${EVENT_LABELS[ev.kind] || ev.kind}, ${fmtClock(ev.at)}${evExtra(ev)}">
+          <b>${EVENT_LABELS[ev.kind] || ev.kind}</b>, ${fmtClock(ev.at)}${evExtra(ev)}
         </div>`).join('')
     }</div>`;
 
@@ -465,7 +475,7 @@ function hourRow(h, clockedIn, note, date, editable, withEvents = false) {
   const chips = chipsOf(h.metrics);
   const events = !withEvents ? '' : (h.details || []).map(ev => `
     <span class="pill ${ev.kind}">
-      <b>${EVENT_LABELS[ev.kind] || ev.kind}</b>, ${fmtClock(ev.at)}${ev.label ? ` · ${escapeHtml(ev.label)}` : ''}
+      <b>${EVENT_LABELS[ev.kind] || ev.kind}</b>, ${fmtClock(ev.at)}${evExtra(ev)}
     </span>`).join('');
 
   return `
@@ -503,6 +513,11 @@ function coveredHours(shifts, date) {
 // ─── Hour detail ───────────────────────────────────────────────────────────
 
 let openHour = null;
+
+// Duration first, then what it was about — for a call the length is the useful part.
+const evExtra = ev =>
+  (ev.dur && fmtDur(ev.dur) ? ` · ${fmtDur(ev.dur)}` : '') +
+  (ev.label ? ` · ${escapeHtml(ev.label)}` : '');
 
 function chipsFor(hour) {
   return Object.entries(hour?.metrics || {})
