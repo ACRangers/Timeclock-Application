@@ -77,6 +77,11 @@ dispatch and billing data. Tables this app **reads**: `scoreboard_cache`, `track
 - **Zero hours is ambiguous.** A missing scope gives `403 Scope validation failed`, which
   looks exactly like nobody worked. The error lands in `time_sync_state.last_error` and the
   Team screen banners it — keep that link intact if you touch the sync.
+- **Never let an ST call run without a timeout.** axios has none by default, and a hung
+  socket wedged the sync twice: the run never ended, so the one-at-a-time guard never
+  released and every later run — timer, nudge and manual button alike — returned
+  "already running" until a redeploy. `ST_TIMEOUT` bounds every request and
+  `SYNC_LOCK_MS` expires the guard, so a stuck run costs 15 minutes, not days.
 - **A sync that stops running reports nothing at all.** This happened: the timer died on
   2026-08-13 and hours silently froze for four days with `last_error` null the whole time.
   Three defences now, keep all three — `setInterval` is armed **before** the first run so a

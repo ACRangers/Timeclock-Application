@@ -457,6 +457,10 @@ app.get('/api/time/activity', requireAuth, async (req, res) => {
 // The office team punches in ServiceTitan (Payroll → Timesheets). This app mirrors
 // those punches into time_st_shifts and never creates, edits, or deletes ST time.
 
+// No timeout means a dead socket waits forever, which is exactly how the sync
+// wedged: the run never ended, so the guard below never released.
+const ST_TIMEOUT = 25000;
+
 const stReady = () => !!(process.env.ST_CLIENT_ID && process.env.ST_CLIENT_SECRET && process.env.ST_TENANT_ID);
 const tid = () => process.env.ST_TENANT_ID;
 
@@ -467,7 +471,7 @@ async function getToken() {
   const res = await axios.post(
     process.env.ST_AUTH_URL,
     `grant_type=client_credentials&client_id=${process.env.ST_CLIENT_ID}&client_secret=${process.env.ST_CLIENT_SECRET}`,
-    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: ST_TIMEOUT }
   );
   stToken = { token: res.data.access_token, expiresAt: Date.now() + (res.data.expires_in - 60) * 1000 };
   return stToken.token;
@@ -479,7 +483,8 @@ async function stGet(endpoint, attempt = 0) {
   const token = await getToken();
   try {
     const res = await axios.get(`${process.env.ST_API_URL}${endpoint}`, {
-      headers: { Authorization: `Bearer ${token}`, 'ST-App-Key': process.env.ST_APP_KEY }
+      headers: { Authorization: `Bearer ${token}`, 'ST-App-Key': process.env.ST_APP_KEY },
+      timeout: ST_TIMEOUT
     });
     return res.data;
   } catch (e) {
@@ -544,18 +549,27 @@ const ST_NAME_ALIASES = {
 };
 
 const SYNC_KEY = 'st_timesheet_activities';
-const SYNC_MINUTES = 10;
+const SYNC_MINUTES = 5;
 const BACKFILL_DAYS = 60;
 
-// One sync at a time. Without this a manual refresh landing on top of the timer
-// would have both walking the cursor.
-let syncing = false;
+// One sync at a time — but a lock with no expiry is just a deadlock waiting to
+// happen. A run still holding it after this long is treated as dead and replaced;
+// that is strictly better than never syncing again.
+//
+// Well clear of the 5-minute tick on purpose: a backfill pass can legitimately run
+// for minutes, and declaring it stuck would start a second one alongside it.
+const SYNC_LOCK_MS = 15 * 60 * 1000;
+let syncStartedAt = 0;
+const syncStuck = () => syncStartedAt > 0 && Date.now() - syncStartedAt > SYNC_LOCK_MS;
+const syncRunning = () => syncStartedAt > 0 && !syncStuck();
 
 // `from` forces a pull by creation date over an explicit window, ignoring the cursor
 // — that is what makes a manual refresh able to recover a stalled or wrong cursor.
 async function syncShifts({ from = null } = {}) {
-  if (!pool || !stReady() || syncing) return { skipped: true };
-  syncing = true;
+  if (!pool || !stReady()) return { skipped: true };
+  if (syncRunning()) return { skipped: true };
+  if (syncStuck()) console.error(`[ST SYNC] previous run stuck for ${Math.round((Date.now() - syncStartedAt) / 60000)} min — starting a new one`);
+  syncStartedAt = Date.now();
   const runStart = new Date();
   let since = null;
 
@@ -648,14 +662,14 @@ async function syncShifts({ from = null } = {}) {
     console.error('[ST SYNC]', msg);
     return { error: msg };
   } finally {
-    syncing = false;
+    syncStartedAt = 0;
   }
 }
 
 // The timer stopped firing once already and nothing noticed for four days, so the
 // screens that read this data also nudge it: if the last run is stale, kick one off
 // in the background. Requests are the one heartbeat we can rely on.
-const STALE_MINUTES = 12;
+const STALE_MINUTES = 7;
 let lastKick = 0;
 
 async function nudgeSync() {
