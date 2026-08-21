@@ -252,8 +252,25 @@ select, input, textarea {
 .cel:hover { background: color-mix(in srgb, var(--text1) 6%, transparent); }
 /* Activity with no punch under it — a missed punch, not a performance signal. */
 .cel.orphan { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--red) 45%, transparent); }
-/* A task someone added by hand is drawn as one of the pills, not as a marker off
-   to the side — it is part of the day, so it sits in the day. */
+/* A task runs the length of the time it took, so it gets its own strip of the
+   column. Sharing the activity lane would mean a two-hour task lying across every
+   call underneath it. */
+.tasklane {
+  position: absolute; left: 20px; width: 36%; top: 0; bottom: 0; z-index: 3;
+}
+.taskblk {
+  position: absolute; box-sizing: border-box;
+  border-radius: 5px; padding: 2px 8px;
+  border-right: 3px solid transparent; background-clip: padding-box;
+  color: #fff; font-size: 10.5px; line-height: 1.3;
+  overflow: hidden; cursor: pointer;
+}
+.taskblk.admin   { background: #15803d; }
+.taskblk.meeting { background: #be123c; }
+.taskblk.other   { background: #a16207; }
+.taskblk:hover   { filter: brightness(1.08); }
+
+/* The same colours where a task is listed rather than drawn. */
 .pill.task          { background: #15803d; pointer-events: auto; cursor: pointer; }
 .pill.task.meeting  { background: #be123c; }
 .pill.task.other    { background: #a16207; }

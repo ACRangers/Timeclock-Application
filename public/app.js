@@ -310,23 +310,30 @@ function renderCalendar(el, columns, { editable = false, detailed = false } = {}
     // Named events, laid out in their ten-minute row. The lane keeps them clear of
     // the shift spine, so the percentages are of the space actually available.
     // Tasks join the hour they start in, then everything lays out together.
-    const withTasks = (col.hours || []).map(h => {
-      const mine = (notes || []).filter(n => Math.floor(n.start_min / 60) === h.hour).map(n => taskEvent(n, col.date));
-      return mine.length ? { ...h, total: h.total + mine.length, details: [...h.details, ...mine] } : h;
-    });
+    const tasks = detailed ? (notes || []) : [];
+    const taskBlocks = tasks.length ? `<div class="tasklane">${
+      packColumns(tasks).map(({ n, col: c, of }) => `
+        <div class="taskblk ${n.category || 'other'}" data-note="${n.id}"
+             style="top:${n.start_min / 60 * hourPx}px;height:${Math.max((n.end_min - n.start_min) / 60 * hourPx - 2, 16)}px;
+                    left:${(c / of) * 100}%;width:${100 / of}%"
+             title="${evText(taskEvent(n, col.date), true)}">
+          ${evText(taskEvent(n, col.date))}
+        </div>`).join('')
+    }</div>` : '';
 
-    const pills = !detailed ? '' : `<div class="lane">${
-      withTasks.filter(h => h.total).flatMap(h => pillsFor(h, hourPx)).map(ev => `
-        <div class="pill ${ev.kind === 'task' ? 'task ' + ev.cat : ev.kind}"
+    // The activity lane gives up room only when there is something to give it to.
+    const pills = !detailed ? '' : `<div class="lane"${tasks.length ? ' style="left:38%"' : ''}>${
+      (col.hours || []).filter(h => h.total).flatMap(h => pillsFor(h, hourPx)).map(ev => `
+        <div class="pill ${ev.kind}"
              style="top:${ev.top}px;left:${ev.left}%;width:${ev.width}%"
-             title="${evText(ev, true)}"${ev.kind === 'task' ? ` data-note="${ev.id}"` : ''}>
+             title="${evText(ev, true)}">
           ${evText(ev)}
         </div>`).join('')
     }</div>`;
 
     return `<div class="col">
               <div class="colhead">${escapeHtml(col.label)}${col.sub ? `<span>${escapeHtml(col.sub)}</span>` : ''}</div>
-              <div class="colbody" style="height:${24 * hourPx}px">${blocks}${cells}${pills}</div>
+              <div class="colbody" style="height:${24 * hourPx}px">${blocks}${cells}${taskBlocks}${pills}</div>
             </div>`;
   }).join('');
 
@@ -595,6 +602,27 @@ const fmtMin = m => {
 
 const quarterOptions = sel => QUARTERS
   .map(m => `<option value="${m}"${m === sel ? ' selected' : ''}>${fmtMin(m)}</option>`).join('');
+
+// Two tasks that overlap in time each take half the strip; three take a third. The
+// column count is per overlapping group, so an isolated task still gets the full width.
+function packColumns(notes) {
+  const sorted = notes.slice().sort((a, b) => a.start_min - b.start_min || a.end_min - b.end_min);
+  const out = [];
+  let group = [], groupEnd = -1;
+
+  const flush = () => {
+    group.forEach((n, i) => out.push({ n, col: i, of: group.length }));
+    group = []; groupEnd = -1;
+  };
+
+  for (const n of sorted) {
+    if (group.length && n.start_min >= groupEnd) flush();
+    group.push(n);
+    groupEnd = Math.max(groupEnd, n.end_min);
+  }
+  flush();
+  return out;
+}
 
 // A manual task is drawn exactly like a tracked one: same lane, same five-minute
 // row, same column split. Sharing the layout is what stops it covering anything.
