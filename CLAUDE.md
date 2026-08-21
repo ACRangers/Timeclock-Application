@@ -11,7 +11,7 @@ person, laying hours and activity side by side.
 Two sources, neither of them us:
 
 ```
-ServiceTitan  Payroll → Timesheets ──►  hours    (time_st_shifts, synced every 10 min)
+ServiceTitan  Timesheets → Activities ─►  hours    (time_st_shifts, synced every 5 min)
 HVAC Tracker  scoreboard_cache     ──►  activity (read live, never written)
 ```
 
