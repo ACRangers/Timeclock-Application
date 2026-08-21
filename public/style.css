@@ -199,7 +199,7 @@ select, input, textarea {
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
 }
 
-.gutter { position: sticky; left: 0; z-index: 3; background: var(--surface); flex: none; }
+.gutter { position: sticky; left: 0; z-index: 6; background: var(--surface); flex: none; }
 .tick {
   width: 52px; padding: 2px 6px 0 0; box-sizing: border-box;
   border-top: 1px solid var(--border); border-right: 1px solid var(--border);
@@ -213,7 +213,7 @@ select, input, textarea {
 .col:last-child { border-right: 0; }
 
 .colhead {
-  position: sticky; top: 0; z-index: 2; height: 38px; box-sizing: border-box;
+  position: sticky; top: 0; z-index: 5; height: 38px; box-sizing: border-box;
   background: var(--surface); border-bottom: 1px solid var(--border);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden;
@@ -457,6 +457,8 @@ select, input, textarea {
 /* Task text is user-written and variable length, unlike the formulaic event pills —
    let it wrap instead of ellipsing so the job number at the end stays visible. */
 .evlist .pill.task { white-space: normal; height: auto; text-overflow: clip; }
+/* Added by hand, so it sits a little apart from what was tracked automatically. */
+.evlist.tasks { margin-top: 8px; }
 
 .hour-detail { margin-bottom: 4px; }
 .hour-detail .who { font-weight: 600; margin-bottom: 8px; }
