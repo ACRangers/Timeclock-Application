@@ -107,13 +107,31 @@
     <div class="modal">
       <h2 id="hour-title"></h2>
       <div id="hour-detail" class="hour-detail"></div>
-      <label for="hour-note" id="hour-note-label">What were you doing?</label>
-      <textarea id="hour-note" rows="3" placeholder="Anything the system wouldn't have recorded"></textarea>
-      <p class="error" id="hour-error" hidden></p>
       <div class="modal-actions">
-        <button id="hour-delete" class="ghost">Delete</button>
         <button id="hour-cancel" class="ghost">Close</button>
-        <button id="hour-save" class="primary">Save</button>
+        <button id="hour-add" class="primary">+ Add what you did</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add what you did -->
+  <div id="note-modal" class="overlay" hidden>
+    <div class="modal">
+      <h2 id="note-title">Add what you did</h2>
+      <p class="note-date" id="note-date"></p>
+      <div class="span">
+        <label for="note-start">From</label>
+        <select id="note-start"></select>
+        <label for="note-end">to</label>
+        <select id="note-end"></select>
+      </div>
+      <label for="note-text">What were you doing?</label>
+      <textarea id="note-text" rows="3" placeholder="A meeting, training, one long call — anything the system would not have recorded"></textarea>
+      <p class="error" id="note-error" hidden></p>
+      <div class="modal-actions">
+        <button id="note-delete" class="ghost">Delete</button>
+        <button id="note-cancel" class="ghost">Cancel</button>
+        <button id="note-save" class="primary">Save</button>
       </div>
     </div>
   </div>

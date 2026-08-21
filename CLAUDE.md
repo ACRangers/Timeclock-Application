@@ -121,6 +121,12 @@ columns; a column is a date (day/week) or a person (the team coverage board). Ad
 view means supplying different columns, not writing another renderer. The axis is always the
 full 24 hours — punches here genuinely run 00:00 to 23:00.
 
+**A note is a span, not an hour.** `time_notes` holds `start_min`/`end_min` (minutes from
+Arizona midnight, on the quarter hour), so someone can say "1:00 to 2:15, team meeting" and
+have it drawn on the calendar as the block it was. Several notes may share a day. Written only
+by the person whose hours they are — identity comes from the session, and a manager PUT lands
+on the manager's own row rather than being refused, because the body is never trusted.
+
 **Write the audit trail from day one.** Every create/edit/approve goes into `time_audit_log`
 with before/after. It is cheap now and is the only thing that lets this become payroll-grade
 later without a rewrite.

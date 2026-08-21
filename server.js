@@ -76,6 +76,17 @@ async function initDB() {
       )
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_time_notes_date ON time_notes(work_date)`);
+    await pool.query(`ALTER TABLE time_notes ADD COLUMN IF NOT EXISTS start_min INTEGER`);
+    await pool.query(`ALTER TABLE time_notes ADD COLUMN IF NOT EXISTS end_min INTEGER`);
+    // A note used to belong to an hour; now it spans one. The old rows become the
+    // hour they were written on, and several notes may now share a day.
+    const { rows: hasHour } = await pool.query(
+      "SELECT 1 FROM information_schema.columns WHERE table_name = 'time_notes' AND column_name = 'hour'");
+    if (hasHour.length) {
+      await pool.query('UPDATE time_notes SET start_min = hour * 60, end_min = hour * 60 + 60 WHERE start_min IS NULL');
+      await pool.query('ALTER TABLE time_notes DROP CONSTRAINT IF EXISTS time_notes_username_work_date_hour_key');
+      await pool.query('ALTER TABLE time_notes DROP COLUMN hour');
+    }
     await pool.query(`
       CREATE TABLE IF NOT EXISTS time_sync_state (
         key          TEXT PRIMARY KEY,
@@ -737,18 +748,16 @@ const minutesOf = shifts => shifts.reduce((n, s) => n + shiftMinutes(s), 0);
 
 async function notesOnDate(date) {
   const { rows } = await pool.query(
-    'SELECT person_name, hour, note FROM time_notes WHERE work_date = $1::date', [date]
+    `SELECT id, person_name, start_min, end_min, note FROM time_notes
+      WHERE work_date = $1::date ORDER BY start_min`, [date]
   );
   return rows;
 }
 
-// { hour: note } for one person on one day.
-const notesOf = (rows, personName) => Object.fromEntries(
-  rows.filter(r => namesMatch(r.person_name, personName)).map(r => [r.hour, r.note])
-);
+const notesOf = (rows, personName) =>
+  rows.filter(r => namesMatch(r.person_name, personName))
+      .map(({ id, start_min, end_min, note }) => ({ id, start_min, end_min, note }));
 
-// The hour is derived from the session, never from the body, so a note cannot be
-// written onto someone else's timesheet.
 // Everything one Arizona day needs, fetched once and then sliced per person — the
 // same reason dayContext() exists. A week is 7 of these, not 7 x 25 queries.
 async function dayBundle(date) {
@@ -784,29 +793,53 @@ async function personWeek(personName, start) {
   };
 }
 
+// Times come in as minutes from midnight, Arizona, on the quarter hour.
+const QUARTER = 15;
+
+function validSpan(start, end) {
+  if (!Number.isInteger(start) || !Number.isInteger(end)) return 'Pick a start and end time';
+  if (start % QUARTER || end % QUARTER) return 'Times must land on a quarter hour';
+  if (start < 0 || end > 24 * 60) return 'Times must be within the day';
+  if (end <= start) return 'The end has to come after the start';
+  return null;
+}
+
+// The person comes from the session, so a note can only ever be written onto the
+// author's own timesheet, whatever the body claims.
 app.put('/api/time/notes', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'No database connection' });
+  const id = req.body?.id ? Number(req.body.id) : null;
   const date = String(req.body?.date || '');
-  const hour = Number(req.body?.hour);
+  const start = Number(req.body?.start);
+  const end = Number(req.body?.end);
   const note = String(req.body?.note || '').trim();
+
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'Bad date' });
-  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return res.status(400).json({ error: 'Bad hour' });
-  if (!note) return res.status(400).json({ error: 'Note is empty' });
+  const bad = validSpan(start, end);
+  if (bad) return res.status(400).json({ error: bad });
+  if (!note) return res.status(400).json({ error: 'Write what you were doing' });
 
   try {
-    const { rows: before } = await pool.query(
-      'SELECT * FROM time_notes WHERE username = $1 AND work_date = $2::date AND hour = $3',
-      [req.user.username, date, hour]
-    );
+    if (id) {
+      const { rows: before } = await pool.query(
+        'SELECT * FROM time_notes WHERE id = $1 AND username = $2', [id, req.user.username]
+      );
+      if (!before.length) return res.status(404).json({ error: 'That note is not yours' });
+      const { rows } = await pool.query(
+        `UPDATE time_notes SET start_min = $2, end_min = $3, note = $4, updated_at = now()
+          WHERE id = $1 RETURNING *`,
+        [id, start, end, note]
+      );
+      await audit('note', id, 'edit', before[0], rows[0], req.user.name);
+      return res.json(rows[0]);
+    }
+
     const { rows } = await pool.query(
-      `INSERT INTO time_notes (username, person_name, work_date, hour, note)
-       VALUES ($1, $2, $3::date, $4, $5)
-       ON CONFLICT (username, work_date, hour)
-       DO UPDATE SET note = EXCLUDED.note, updated_at = now()
-       RETURNING *`,
-      [req.user.username, req.user.name, date, hour, note]
+      `INSERT INTO time_notes (username, person_name, work_date, start_min, end_min, note)
+       VALUES ($1, $2, $3::date, $4, $5, $6) RETURNING *`,
+      [req.user.username, req.user.name, date, start, end, note]
     );
-    await audit('note', rows[0].id, before.length ? 'edit' : 'add', before[0] || null, rows[0], req.user.name);
+    await audit('note', rows[0].id, 'add', null, rows[0], req.user.name);
     res.json(rows[0]);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -815,14 +848,12 @@ app.put('/api/time/notes', requireAuth, async (req, res) => {
 
 app.delete('/api/time/notes', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ error: 'No database connection' });
-  const date = String(req.body?.date || '');
-  const hour = Number(req.body?.hour);
   try {
     const { rows } = await pool.query(
-      'DELETE FROM time_notes WHERE username = $1 AND work_date = $2::date AND hour = $3 RETURNING *',
-      [req.user.username, date, hour]
+      'DELETE FROM time_notes WHERE id = $1 AND username = $2 RETURNING *',
+      [Number(req.body?.id), req.user.username]
     );
-    if (!rows.length) return res.status(404).json({ error: 'No note there' });
+    if (!rows.length) return res.status(404).json({ error: 'That note is not yours' });
     await audit('note', rows[0].id, 'delete', rows[0], null, req.user.name);
     res.json({ ok: true });
   } catch (e) {

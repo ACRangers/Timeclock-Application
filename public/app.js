@@ -285,7 +285,7 @@ function renderCalendar(el, columns, { editable = false, detailed = false } = {}
   const cols = columns.map(col => {
     const byHour = Object.fromEntries((col.hours || []).map(h => [h.hour, h.total]));
     const covered = coveredHours(col.shifts || [], col.date);
-    const notes = col.notes || {};
+    const notes = col.notes || [];
 
     const blocks = blocksFor(col.shifts || [], col.date).map(b => {
       const label = b.kind === 'ot' ? 'OT' : (b.code && b.code !== 'Working' ? b.code : '');
@@ -303,7 +303,7 @@ function renderCalendar(el, columns, { editable = false, detailed = false } = {}
       const orphan = !on && n > 0 && (col.shifts || []).length > 0;
       return `<div class="cel${on ? ' on' : ''}${orphan ? ' orphan' : ''}" style="height:${hourPx}px"
                    data-col="${col.key}" data-hour="${h}">
-                ${n && !detailed ? `<b>${n}</b>` : ''}${notes[h] ? '<i class="dot"></i>' : ''}
+                ${n && !detailed ? `<b>${n}</b>` : ''}${notesInHour(notes, h).length && !detailed ? '<i class="dot"></i>' : ''}
               </div>`;
     }).join('');
 
@@ -318,9 +318,16 @@ function renderCalendar(el, columns, { editable = false, detailed = false } = {}
         </div>`).join('')
     }</div>`;
 
+    const noteBlocks = !detailed ? '' : notes.map(n => `
+      <div class="notepill" data-note="${n.id}"
+           style="top:${n.start_min / 60 * hourPx}px;height:${Math.max((n.end_min - n.start_min) / 60 * hourPx - 2, 15)}px"
+           title="${fmtMin(n.start_min)}–${fmtMin(n.end_min)} · ${escapeHtml(n.note)}">
+        <b>${fmtMin(n.start_min)}–${fmtMin(n.end_min)}</b> ${escapeHtml(n.note)}
+      </div>`).join('');
+
     return `<div class="col">
               <div class="colhead">${escapeHtml(col.label)}${col.sub ? `<span>${escapeHtml(col.sub)}</span>` : ''}</div>
-              <div class="colbody" style="height:${24 * hourPx}px">${blocks}${cells}${pills}</div>
+              <div class="colbody" style="height:${24 * hourPx}px">${blocks}${cells}${pills}${noteBlocks}</div>
             </div>`;
   }).join('');
 
@@ -399,9 +406,9 @@ const totalLine = (minutes, ot, label, points) =>
 // The hour-by-hour list under the calendar: what the tracker saw, and the note.
 function renderBreakdown(day, editable) {
   const covered = coveredHours(day.shifts, day.date);
-  const rows = day.activity.hours.filter(h => covered.has(h.hour) || h.total > 0 || day.notes[h.hour]);
+  const rows = day.activity.hours.filter(h => covered.has(h.hour) || h.total > 0 || notesInHour(day.notes, h.hour).length);
   $('day-hours').innerHTML = rows.length
-    ? rows.map(h => hourRow(h, covered.has(h.hour), day.notes[h.hour], day.date, editable)).join('')
+    ? rows.map(h => hourRow(h, covered.has(h.hour), notesInHour(day.notes, h.hour), day.date, editable)).join('')
     : '<p class="empty">Nothing recorded for this day.</p>';
 }
 
@@ -428,7 +435,7 @@ function renderWeekBreakdown(week, editable) {
 
   const d = week.days.find(x => x.date === weekDay);
   const covered = coveredHours(d.shifts, d.date);
-  const rows = d.activity.hours.filter(h => covered.has(h.hour) || h.total > 0 || d.notes[h.hour]);
+  const rows = d.activity.hours.filter(h => covered.has(h.hour) || h.total > 0 || notesInHour(d.notes, h.hour).length);
   const ot = overtimeOf(d.shifts);
 
   $('day-hours').innerHTML = `
@@ -440,7 +447,7 @@ function renderWeekBreakdown(week, editable) {
       <div class="chips">${chipsOf(d.activity.totals)}</div>
     </div>
     ${rows.length
-      ? rows.map(h => hourRow(h, covered.has(h.hour), d.notes[h.hour], d.date, editable, true)).join('')
+      ? rows.map(h => hourRow(h, covered.has(h.hour), notesInHour(d.notes, h.hour), d.date, editable, true)).join('')
       : '<p class="empty">Nothing recorded on this day.</p>'}`;
 }
 
@@ -471,7 +478,7 @@ function renderWeekSummary(week) {
     </table>`;
 }
 
-function hourRow(h, clockedIn, note, date, editable, withEvents = false) {
+function hourRow(h, clockedIn, notes, date, editable, withEvents = false) {
   const chips = chipsOf(h.metrics);
   const events = !withEvents ? '' : (h.details || []).map(ev => `
     <span class="pill ${ev.kind}">
@@ -486,8 +493,9 @@ function hourRow(h, clockedIn, note, date, editable, withEvents = false) {
         ${clockedIn ? '' : '<div class="tag">Not clocked in</div>'}
         ${chips ? `<div class="chips">${chips}</div>` : '<div class="quiet">No tracked activity this hour.</div>'}
         ${events ? `<div class="evlist">${events}</div>` : ''}
-        ${note ? `<div class="note">${escapeHtml(note)}</div>`
-               : (editable ? '<div class="add">+ add what you did</div>' : '')}
+        ${(notes || []).map(n => `<div class="note" data-note="${n.id}">
+             <b>${fmtMin(n.start_min)}–${fmtMin(n.end_min)}</b> ${escapeHtml(n.note)}</div>`).join('')}
+        ${editable ? '<div class="add">+ add what you did</div>' : ''}
       </div>
     </div>`;
 }
@@ -512,8 +520,6 @@ function coveredHours(shifts, date) {
 
 // ─── Hour detail ───────────────────────────────────────────────────────────
 
-let openHour = null;
-
 // Duration first, then what it was about — for a call the length is the useful part.
 const evExtra = ev =>
   (ev.dur && fmtDur(ev.dur) ? ` · ${fmtDur(ev.dur)}` : '') +
@@ -526,17 +532,23 @@ function chipsFor(hour) {
     .join('');
 }
 
+let hourContext = null;
+
 function openHourModal({ date, hour, day, editable, person }) {
   const h = day.activity.hours[hour];
   const chips = chipsFor(h);
-  openHour = editable ? { date, hour } : null;
+  hourContext = { date, hour, editable };
 
-  // Every event in the hour, so the calendar's "+N more" has somewhere to lead.
   const events = (h?.details || []).map(ev => `
     <div class="ev">
       <span class="t">${fmtClock(ev.at)}</span>
       <span class="k">${EVENT_LABELS[ev.kind] || ev.kind}</span>
-      <span class="l">${escapeHtml(ev.label || '')}</span>
+      <span class="l">${ev.dur && fmtDur(ev.dur) ? fmtDur(ev.dur) + ' · ' : ''}${escapeHtml(ev.label || '')}</span>
+    </div>`).join('');
+
+  const notes = notesInHour(day.notes, hour).map(n => `
+    <div class="note${editable ? ' tappable' : ''}" data-note="${n.id}">
+      <b>${fmtMin(n.start_min)}–${fmtMin(n.end_min)}</b> ${escapeHtml(n.note)}
     </div>`).join('');
 
   $('hour-title').textContent = `${fmtHour(hour)} · ${fmtDay(date)}`;
@@ -544,49 +556,89 @@ function openHourModal({ date, hour, day, editable, person }) {
     (person ? `<div class="who">${escapeHtml(person)}</div>` : '') +
     (chips ? `<div class="chips">${chips}</div>` : '') +
     (events || (chips ? '' : '<div class="quiet">No tracked activity this hour.</div>')) +
-    (day.notes?.[hour] && !editable ? `<div class="note">${escapeHtml(day.notes[hour])}</div>` : '');
+    notes;
 
-  const note = day.notes?.[hour] || '';
-  $('hour-note').value = note;
-  // Managers read notes; the person whose hour it is writes them.
-  $('hour-note').hidden = $('hour-note-label').hidden = !editable;
-  $('hour-save').hidden = !editable;
-  $('hour-delete').hidden = !editable || !note;
-  $('hour-error').hidden = true;
+  // Only your own calendar offers to add to it.
+  $('hour-add').hidden = !editable;
   $('hour-modal').hidden = false;
-  if (editable) $('hour-note').focus();
+}
+
+// ─── Notes ─────────────────────────────────────────────────────────────────
+//
+// A note is a span of time you draw on your own calendar, on the quarter hour.
+
+const QUARTER = 15;
+const QUARTERS = Array.from({ length: (24 * 60) / QUARTER + 1 }, (_, i) => i * QUARTER);
+
+const fmtMin = m => {
+  const h = Math.floor(m / 60) % 24, mm = m % 60;
+  if (m >= 24 * 60) return 'midnight';
+  return `${h % 12 === 0 ? 12 : h % 12}:${String(mm).padStart(2, '0')}${h < 12 ? 'am' : 'pm'}`;
+};
+
+const quarterOptions = sel => QUARTERS
+  .map(m => `<option value="${m}"${m === sel ? ' selected' : ''}>${fmtMin(m)}</option>`).join('');
+
+// Which hours a note touches, for the week view's dot and the hour list.
+const notesInHour = (notes, hour) =>
+  (notes || []).filter(n => n.start_min < (hour + 1) * 60 && n.end_min > hour * 60);
+
+let editingNote = null;
+
+function editNote(id) {
+  for (const d of myDays) {
+    const n = (d.notes || []).find(x => String(x.id) === String(id));
+    if (n) return openNote({ date: d.date, startMin: n.start_min, note: n });
+  }
+}
+
+function openNote({ date, startMin, note }) {
+  editingNote = { date, id: note?.id || null };
+  const start = note ? note.start_min : startMin;
+  const end = note ? note.end_min : Math.min(startMin + 30, 24 * 60);
+
+  $('note-title').textContent = note ? 'Edit what you did' : 'Add what you did';
+  $('note-date').textContent = fmtDay(date);
+  $('note-start').innerHTML = quarterOptions(start);
+  $('note-end').innerHTML = quarterOptions(end);
+  $('note-text').value = note ? note.note : '';
+  $('note-delete').hidden = !note;
+  $('note-error').hidden = true;
+  $('note-modal').hidden = false;
+  $('note-text').focus();
 }
 
 async function saveNote() {
-  if (!openHour) return;
-  const note = $('hour-note').value.trim();
-  $('hour-save').disabled = true;
+  if (!editingNote) return;
+  const body = {
+    id: editingNote.id,
+    date: editingNote.date,
+    start: Number($('note-start').value),
+    end: Number($('note-end').value),
+    note: $('note-text').value.trim()
+  };
+  $('note-save').disabled = true;
   try {
-    if (!note) {
-      $('hour-error').textContent = 'Write something, or press Delete to clear it.';
-      $('hour-error').hidden = false;
-      return;
-    }
-    await api('/api/time/notes', { method: 'PUT', body: JSON.stringify({ ...openHour, note }) });
-    $('hour-modal').hidden = true;
+    await api('/api/time/notes', { method: 'PUT', body: JSON.stringify(body) });
+    $('note-modal').hidden = true;
     loadDay();
   } catch (e) {
-    $('hour-error').textContent = e.message;
-    $('hour-error').hidden = false;
+    $('note-error').textContent = e.message;
+    $('note-error').hidden = false;
   } finally {
-    $('hour-save').disabled = false;
+    $('note-save').disabled = false;
   }
 }
 
 async function deleteNote() {
-  if (!openHour) return;
+  if (!editingNote?.id) return;
   try {
-    await api('/api/time/notes', { method: 'DELETE', body: JSON.stringify(openHour) });
-    $('hour-modal').hidden = true;
+    await api('/api/time/notes', { method: 'DELETE', body: JSON.stringify({ id: editingNote.id }) });
+    $('note-modal').hidden = true;
     loadDay();
   } catch (e) {
-    $('hour-error').textContent = e.message;
-    $('hour-error').hidden = false;
+    $('note-error').textContent = e.message;
+    $('note-error').hidden = false;
   }
 }
 
@@ -767,6 +819,8 @@ $('day-back').addEventListener('click', () => { viewing = null; showView('team')
 
 // One listener per screen rather than per element — both redraw constantly.
 $('day-cal').addEventListener('click', e => {
+  const np = e.target.closest('.notepill');
+  if (np && !viewing) return editNote(np.dataset.note);
   const cel = e.target.closest('.cel');
   if (!cel) return;
   const day = myDays.find(d => d.date === cel.dataset.col);
@@ -774,6 +828,8 @@ $('day-cal').addEventListener('click', e => {
 });
 
 $('day-hours').addEventListener('click', e => {
+  const nd = e.target.closest('.note[data-note]');
+  if (nd && !viewing) return editNote(nd.dataset.note);
   const row = e.target.closest('.hour');
   if (!row) return;
   const day = myDays.find(d => d.date === row.dataset.date);
@@ -781,8 +837,20 @@ $('day-hours').addEventListener('click', e => {
 });
 
 $('hour-cancel').addEventListener('click', () => { $('hour-modal').hidden = true; });
-$('hour-save').addEventListener('click', saveNote);
-$('hour-delete').addEventListener('click', deleteNote);
+$('hour-add').addEventListener('click', () => {
+  $('hour-modal').hidden = true;
+  openNote({ date: hourContext.date, startMin: hourContext.hour * 60 });
+});
+
+$('note-cancel').addEventListener('click', () => { $('note-modal').hidden = true; });
+$('note-save').addEventListener('click', saveNote);
+$('note-delete').addEventListener('click', deleteNote);
+// Keep the end after the start without arguing with the person doing the typing.
+$('note-start').addEventListener('change', () => {
+  if (Number($('note-end').value) <= Number($('note-start').value)) {
+    $('note-end').value = String(Math.min(Number($('note-start').value) + 15, 24 * 60));
+  }
+});
 
 document.querySelectorAll('.tabs button').forEach(b => {
   b.addEventListener('click', () => showView(b.dataset.view));
