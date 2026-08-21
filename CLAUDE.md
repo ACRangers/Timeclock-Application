@@ -121,6 +121,8 @@ columns; a column is a date (day/week) or a person (the team coverage board). Ad
 view means supplying different columns, not writing another renderer. The axis is always the
 full 24 hours — punches here genuinely run 00:00 to 23:00.
 
+**A manual task is drawn like a tracked one.** It is merged into its hour's events and laid out by the same `pillsFor()` — same five-minute row, same column split — which is what stops it covering the activity underneath. Reads `Category · Title · time · Job #`, coloured by category: Admin green, Meeting red, Others yellow.
+
 **A note is a span, not an hour.** `time_notes` holds `start_min`/`end_min` (minutes from
 Arizona midnight, on the quarter hour), so someone can say "1:00 to 2:15, team meeting" and
 have it drawn on the calendar as the block it was. Several notes may share a day. Written only

@@ -125,8 +125,16 @@
         <label for="note-end">to</label>
         <select id="note-end"></select>
       </div>
-      <label for="note-text">What were you doing?</label>
-      <textarea id="note-text" rows="3" placeholder="A meeting, training, one long call — anything the system would not have recorded"></textarea>
+      <label for="note-cat">Category</label>
+      <div class="cats" id="note-cat">
+        <button type="button" data-cat="admin">Admin</button>
+        <button type="button" data-cat="meeting">Meeting</button>
+        <button type="button" data-cat="other">Others</button>
+      </div>
+      <label for="note-text">Title</label>
+      <input id="note-text" type="text" maxlength="80" placeholder="What was it?">
+      <label for="note-job">Job number <span class="opt">(optional)</span></label>
+      <input id="note-job" type="text" inputmode="numeric" maxlength="20" placeholder="e.g. 29249">
       <p class="error" id="note-error" hidden></p>
       <div class="modal-actions">
         <button id="note-delete" class="ghost">Delete</button>

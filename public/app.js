@@ -309,25 +309,24 @@ function renderCalendar(el, columns, { editable = false, detailed = false } = {}
 
     // Named events, laid out in their ten-minute row. The lane keeps them clear of
     // the shift spine, so the percentages are of the space actually available.
+    // Tasks join the hour they start in, then everything lays out together.
+    const withTasks = (col.hours || []).map(h => {
+      const mine = (notes || []).filter(n => Math.floor(n.start_min / 60) === h.hour).map(n => taskEvent(n, col.date));
+      return mine.length ? { ...h, total: h.total + mine.length, details: [...h.details, ...mine] } : h;
+    });
+
     const pills = !detailed ? '' : `<div class="lane">${
-      (col.hours || []).filter(h => h.total).flatMap(h => pillsFor(h, hourPx)).map(ev => `
-        <div class="pill ${ev.kind}"
+      withTasks.filter(h => h.total).flatMap(h => pillsFor(h, hourPx)).map(ev => `
+        <div class="pill ${ev.kind === 'task' ? 'task ' + ev.cat : ev.kind}"
              style="top:${ev.top}px;left:${ev.left}%;width:${ev.width}%"
-             title="${EVENT_LABELS[ev.kind] || ev.kind}, ${fmtClock(ev.at)}${evExtra(ev)}">
-          <b>${EVENT_LABELS[ev.kind] || ev.kind}</b>, ${fmtClock(ev.at)}${evExtra(ev)}
+             title="${evText(ev, true)}"${ev.kind === 'task' ? ` data-note="${ev.id}"` : ''}>
+          ${evText(ev)}
         </div>`).join('')
     }</div>`;
 
-    const noteBlocks = !detailed ? '' : notes.map(n => `
-      <div class="notepill" data-note="${n.id}"
-           style="top:${n.start_min / 60 * hourPx}px;height:${Math.max((n.end_min - n.start_min) / 60 * hourPx - 2, 15)}px"
-           title="${fmtMin(n.start_min)}–${fmtMin(n.end_min)} · ${escapeHtml(n.note)}">
-        <b>${fmtMin(n.start_min)}–${fmtMin(n.end_min)}</b> ${escapeHtml(n.note)}
-      </div>`).join('');
-
     return `<div class="col">
               <div class="colhead">${escapeHtml(col.label)}${col.sub ? `<span>${escapeHtml(col.sub)}</span>` : ''}</div>
-              <div class="colbody" style="height:${24 * hourPx}px">${blocks}${cells}${pills}${noteBlocks}</div>
+              <div class="colbody" style="height:${24 * hourPx}px">${blocks}${cells}${pills}</div>
             </div>`;
   }).join('');
 
@@ -482,7 +481,7 @@ function hourRow(h, clockedIn, notes, date, editable, withEvents = false) {
   const chips = chipsOf(h.metrics);
   const events = !withEvents ? '' : (h.details || []).map(ev => `
     <span class="pill ${ev.kind}">
-      <b>${EVENT_LABELS[ev.kind] || ev.kind}</b>, ${fmtClock(ev.at)}${evExtra(ev)}
+      ${evText(ev)}
     </span>`).join('');
 
   return `
@@ -493,8 +492,8 @@ function hourRow(h, clockedIn, notes, date, editable, withEvents = false) {
         ${clockedIn ? '' : '<div class="tag">Not clocked in</div>'}
         ${chips ? `<div class="chips">${chips}</div>` : '<div class="quiet">No tracked activity this hour.</div>'}
         ${events ? `<div class="evlist">${events}</div>` : ''}
-        ${(notes || []).map(n => `<div class="note" data-note="${n.id}">
-             <b>${fmtMin(n.start_min)}–${fmtMin(n.end_min)}</b> ${escapeHtml(n.note)}</div>`).join('')}
+        ${(notes || []).map(n => `<span class="pill task ${n.category || 'other'}" data-note="${n.id}">
+             ${evText(taskEvent(n))}</span>`).join('')}
         ${editable ? '<div class="add">+ add what you did</div>' : ''}
       </div>
     </div>`;
@@ -525,6 +524,16 @@ const evExtra = ev =>
   (ev.dur && fmtDur(ev.dur) ? ` · ${fmtDur(ev.dur)}` : '') +
   (ev.label ? ` · ${escapeHtml(ev.label)}` : '');
 
+// Category · title · time · job for a task; kind · time · detail for an activity.
+function evText(ev, plain = false) {
+  const b = t => (plain ? t : `<b>${t}</b>`);
+  if (ev.kind === 'task') {
+    return b(CATEGORIES[ev.cat] || 'Others') + ' · ' + escapeHtml(ev.title) +
+           ' · ' + ev.span + (ev.job ? ` · Job #${escapeHtml(ev.job)}` : '');
+  }
+  return b(EVENT_LABELS[ev.kind] || ev.kind) + ', ' + fmtClock(ev.at) + evExtra(ev);
+}
+
 function chipsFor(hour) {
   return Object.entries(hour?.metrics || {})
     .filter(([, n]) => n > 0)
@@ -547,16 +556,16 @@ function openHourModal({ date, hour, day, editable, person }) {
     </div>`).join('');
 
   const notes = notesInHour(day.notes, hour).map(n => `
-    <div class="note${editable ? ' tappable' : ''}" data-note="${n.id}">
-      <b>${fmtMin(n.start_min)}–${fmtMin(n.end_min)}</b> ${escapeHtml(n.note)}
-    </div>`).join('');
+    <span class="pill task ${n.category || 'other'}${editable ? ' tappable' : ''}" data-note="${n.id}">
+      ${evText(taskEvent(n))}
+    </span>`).join('');
 
   $('hour-title').textContent = `${fmtHour(hour)} · ${fmtDay(date)}`;
   $('hour-detail').innerHTML =
     (person ? `<div class="who">${escapeHtml(person)}</div>` : '') +
     (chips ? `<div class="chips">${chips}</div>` : '') +
     (events || (chips ? '' : '<div class="quiet">No tracked activity this hour.</div>')) +
-    notes;
+    (notes ? `<div class="evlist">${notes}</div>` : '');
 
   // Only your own calendar offers to add to it.
   $('hour-add').hidden = !editable;
@@ -567,8 +576,16 @@ function openHourModal({ date, hour, day, editable, person }) {
 //
 // A note is a span of time you draw on your own calendar, on the quarter hour.
 
+const CATEGORIES = { admin: 'Admin', meeting: 'Meeting', other: 'Others' };
+
 const QUARTER = 15;
 const QUARTERS = Array.from({ length: (24 * 60) / QUARTER + 1 }, (_, i) => i * QUARTER);
+
+// Arizona minutes back to an instant, for placing a task on the axis.
+const minToIso = (m, date) => {
+  const d = new Date(`${date || dayDate}T00:00:00Z`);
+  return new Date(d.getTime() + (m + 7 * 60) * 60000).toISOString();
+};
 
 const fmtMin = m => {
   const h = Math.floor(m / 60) % 24, mm = m % 60;
@@ -579,11 +596,31 @@ const fmtMin = m => {
 const quarterOptions = sel => QUARTERS
   .map(m => `<option value="${m}"${m === sel ? ' selected' : ''}>${fmtMin(m)}</option>`).join('');
 
+// A manual task is drawn exactly like a tracked one: same lane, same five-minute
+// row, same column split. Sharing the layout is what stops it covering anything.
+const taskEvent = (n, date) => ({
+  kind: 'task',
+  cat: n.category || 'other',
+  id: n.id,
+  at: minToIso(n.start_min, date),
+  span: `${fmtMin(n.start_min)}–${fmtMin(n.end_min)}`,
+  title: n.note,
+  job: n.job_number || null
+});
+
 // Which hours a note touches, for the week view's dot and the hour list.
 const notesInHour = (notes, hour) =>
   (notes || []).filter(n => n.start_min < (hour + 1) * 60 && n.end_min > hour * 60);
 
 let editingNote = null;
+let chosenCategory = 'other';
+
+function pickCategory(cat) {
+  chosenCategory = cat;
+  document.querySelectorAll('#note-cat button').forEach(b => {
+    b.classList.toggle('on', b.dataset.cat === cat);
+  });
+}
 
 function editNote(id) {
   for (const d of myDays) {
@@ -602,6 +639,8 @@ function openNote({ date, startMin, note }) {
   $('note-start').innerHTML = quarterOptions(start);
   $('note-end').innerHTML = quarterOptions(end);
   $('note-text').value = note ? note.note : '';
+  $('note-job').value = note?.job_number || '';
+  pickCategory(note?.category || 'other');
   $('note-delete').hidden = !note;
   $('note-error').hidden = true;
   $('note-modal').hidden = false;
@@ -615,7 +654,9 @@ async function saveNote() {
     date: editingNote.date,
     start: Number($('note-start').value),
     end: Number($('note-end').value),
-    note: $('note-text').value.trim()
+    note: $('note-text').value.trim(),
+    category: chosenCategory,
+    jobNumber: $('note-job').value.trim()
   };
   $('note-save').disabled = true;
   try {
@@ -819,7 +860,7 @@ $('day-back').addEventListener('click', () => { viewing = null; showView('team')
 
 // One listener per screen rather than per element — both redraw constantly.
 $('day-cal').addEventListener('click', e => {
-  const np = e.target.closest('.notepill');
+  const np = e.target.closest('[data-note]');
   if (np && !viewing) return editNote(np.dataset.note);
   const cel = e.target.closest('.cel');
   if (!cel) return;
@@ -828,7 +869,7 @@ $('day-cal').addEventListener('click', e => {
 });
 
 $('day-hours').addEventListener('click', e => {
-  const nd = e.target.closest('.note[data-note]');
+  const nd = e.target.closest('[data-note]');
   if (nd && !viewing) return editNote(nd.dataset.note);
   const row = e.target.closest('.hour');
   if (!row) return;
@@ -842,6 +883,10 @@ $('hour-add').addEventListener('click', () => {
   openNote({ date: hourContext.date, startMin: hourContext.hour * 60 });
 });
 
+$('note-cat').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (b) pickCategory(b.dataset.cat);
+});
 $('note-cancel').addEventListener('click', () => { $('note-modal').hidden = true; });
 $('note-save').addEventListener('click', saveNote);
 $('note-delete').addEventListener('click', deleteNote);

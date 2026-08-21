@@ -78,6 +78,9 @@ async function initDB() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_time_notes_date ON time_notes(work_date)`);
     await pool.query(`ALTER TABLE time_notes ADD COLUMN IF NOT EXISTS start_min INTEGER`);
     await pool.query(`ALTER TABLE time_notes ADD COLUMN IF NOT EXISTS end_min INTEGER`);
+    await pool.query(`ALTER TABLE time_notes ADD COLUMN IF NOT EXISTS category TEXT`);
+    await pool.query(`ALTER TABLE time_notes ADD COLUMN IF NOT EXISTS job_number TEXT`);
+    await pool.query(`UPDATE time_notes SET category = 'other' WHERE category IS NULL`);
     // A note used to belong to an hour; now it spans one. The old rows become the
     // hour they were written on, and several notes may now share a day.
     const { rows: hasHour } = await pool.query(
@@ -748,15 +751,16 @@ const minutesOf = shifts => shifts.reduce((n, s) => n + shiftMinutes(s), 0);
 
 async function notesOnDate(date) {
   const { rows } = await pool.query(
-    `SELECT id, person_name, start_min, end_min, note FROM time_notes
-      WHERE work_date = $1::date ORDER BY start_min`, [date]
+    `SELECT id, person_name, start_min, end_min, note, category, job_number
+       FROM time_notes WHERE work_date = $1::date ORDER BY start_min`, [date]
   );
   return rows;
 }
 
 const notesOf = (rows, personName) =>
   rows.filter(r => namesMatch(r.person_name, personName))
-      .map(({ id, start_min, end_min, note }) => ({ id, start_min, end_min, note }));
+      .map(({ id, start_min, end_min, note, category, job_number }) =>
+        ({ id, start_min, end_min, note, category, job_number }));
 
 // Everything one Arizona day needs, fetched once and then sliced per person — the
 // same reason dayContext() exists. A week is 7 of these, not 7 x 25 queries.
@@ -795,6 +799,7 @@ async function personWeek(personName, start) {
 
 // Times come in as minutes from midnight, Arizona, on the quarter hour.
 const QUARTER = 15;
+const CATEGORIES = new Set(['admin', 'meeting', 'other']);
 
 function validSpan(start, end) {
   if (!Number.isInteger(start) || !Number.isInteger(end)) return 'Pick a start and end time';
@@ -813,11 +818,14 @@ app.put('/api/time/notes', requireAuth, async (req, res) => {
   const start = Number(req.body?.start);
   const end = Number(req.body?.end);
   const note = String(req.body?.note || '').trim();
+  const category = String(req.body?.category || 'other').toLowerCase();
+  const jobNumber = String(req.body?.jobNumber || '').trim() || null;
 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'Bad date' });
   const bad = validSpan(start, end);
   if (bad) return res.status(400).json({ error: bad });
-  if (!note) return res.status(400).json({ error: 'Write what you were doing' });
+  if (!CATEGORIES.has(category)) return res.status(400).json({ error: 'Pick a category' });
+  if (!note) return res.status(400).json({ error: 'Give it a title' });
 
   try {
     if (id) {
@@ -826,18 +834,20 @@ app.put('/api/time/notes', requireAuth, async (req, res) => {
       );
       if (!before.length) return res.status(404).json({ error: 'That note is not yours' });
       const { rows } = await pool.query(
-        `UPDATE time_notes SET start_min = $2, end_min = $3, note = $4, updated_at = now()
+        `UPDATE time_notes SET start_min = $2, end_min = $3, note = $4,
+                category = $5, job_number = $6, updated_at = now()
           WHERE id = $1 RETURNING *`,
-        [id, start, end, note]
+        [id, start, end, note, category, jobNumber]
       );
       await audit('note', id, 'edit', before[0], rows[0], req.user.name);
       return res.json(rows[0]);
     }
 
     const { rows } = await pool.query(
-      `INSERT INTO time_notes (username, person_name, work_date, start_min, end_min, note)
-       VALUES ($1, $2, $3::date, $4, $5, $6) RETURNING *`,
-      [req.user.username, req.user.name, date, start, end, note]
+      `INSERT INTO time_notes
+         (username, person_name, work_date, start_min, end_min, note, category, job_number)
+       VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8) RETURNING *`,
+      [req.user.username, req.user.name, date, start, end, note, category, jobNumber]
     );
     await audit('note', rows[0].id, 'add', null, rows[0], req.user.name);
     res.json(rows[0]);
