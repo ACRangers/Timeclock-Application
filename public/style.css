@@ -393,6 +393,26 @@ select, input, textarea {
 .person-head h2 { font-size: 18px; }
 .total { font-size: 15px; font-weight: 600; color: var(--text2); }
 
+/* What the clocked total is made of, under it. */
+.split { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; margin-top: 2px; }
+.codechip {
+  font-size: 12px; color: var(--text2);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 999px; padding: 2px 10px; white-space: nowrap;
+}
+.codechip b { color: var(--text1); font-variant-numeric: tabular-nums; }
+/* A meal is on the clock but not in the total, so it should not look like the rest. */
+.codechip.unpaid { color: var(--text3); border-style: dashed; }
+.codechip.unpaid b { color: var(--text3); font-weight: 600; }
+.codechip.ot { color: #a16207; border-color: color-mix(in srgb, #eab308 45%, transparent); }
+.codechip.ot b { color: #a16207; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .codechip.ot,
+  :root:not([data-theme="light"]) .codechip.ot b { color: #fde047; }
+}
+:root[data-theme="dark"] .codechip.ot,
+:root[data-theme="dark"] .codechip.ot b { color: #fde047; }
+
 .section-h {
   font-size: 12px; font-weight: 600; color: var(--text3);
   text-transform: uppercase; letter-spacing: .6px; margin: 22px 0 10px;

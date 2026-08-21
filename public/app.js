@@ -196,6 +196,14 @@ function blockOf(shift, date) {
 }
 
 const OT_MINUTES = 8 * 60;
+const UNPAID = new Set(['Meal']);
+
+function punchMinutes(s, date) {
+  if (s.minutes != null) return s.minutes;
+  const on = date || s._date;
+  if (!s.started_at || on !== azTodayStr()) return 0;
+  return Math.max(0, Math.round((Date.now() - new Date(s.started_at)) / 60000));
+}
 
 // Blue up to eight hours, yellow past it. Split at the exact minute the day crosses
 // over, so the yellow part *is* the overtime rather than just a warning that some
@@ -221,9 +229,29 @@ function blocksFor(shifts, date) {
 }
 
 // Paid minutes past the eight-hour mark, for the header line.
-function overtimeOf(shifts) {
-  const paid = shifts.reduce((n, s) => n + (s.timesheet_code === 'Meal' ? 0 : (s.minutes || 0)), 0);
+function overtimeOf(shifts, date) {
+  const paid = shifts.reduce((n, s) => n + (UNPAID.has(s.timesheet_code) ? 0 : punchMinutes(s, date)), 0);
   return Math.max(0, paid - OT_MINUTES);
+}
+
+// What the clocked total is actually made of. Overtime is part of the paid time,
+// not another slice of it, so it is worded to say so rather than added alongside.
+function splitLine(shifts, date, ot) {
+  const by = new Map();
+  shifts.forEach(s => {
+    const code = s.timesheet_code || 'Other';
+    by.set(code, (by.get(code) || 0) + punchMinutes(s, date));
+  });
+  if (!by.size) return '';
+
+  const chips = [...by.entries()]
+    .sort((x, y) => y[1] - x[1])
+    .filter(([, mins]) => mins > 0)
+    .map(([code, mins]) => `<span class="codechip${UNPAID.has(code) ? ' unpaid' : ''}">${
+      escapeHtml(code)} <b>${fmtMinutes(mins)}</b>${UNPAID.has(code) ? ' unpaid' : ''}</span>`);
+
+  if (ot > 0) chips.push(`<span class="codechip ot">of that <b>${fmtMinutes(ot)}</b> overtime</span>`);
+  return chips.join('');
 }
 
 // The row says when, to the nearest five minutes; the columns say how much happened
@@ -343,7 +371,8 @@ async function loadDay() {
         ? await api(`/api/time/day?date=${dayDate}`)
         : await api(`/api/manager/person-day?date=${dayDate}${who}`);
       $('day-date').textContent = dayDate === azTodayStr() ? 'Today' : fmtDay(dayDate);
-      $('day-total').innerHTML = totalLine(d.minutes, overtimeOf(d.shifts), 'clocked', d.activity.points);
+      $('day-total').innerHTML = totalLine(d.minutes, 'clocked', d.activity.points);
+      $('day-split').innerHTML = splitLine(d.shifts, d.date, overtimeOf(d.shifts, d.date));
       myDays = [d];
       renderCalendar($('day-cal'), [{
         key: d.date, label: fmtDay(d.date), date: d.date,
@@ -358,9 +387,13 @@ async function loadDay() {
         ? await api(`/api/time/week?start=${dayDate}`)
         : await api(`/api/manager/person-week?start=${dayDate}${who}`);
       $('day-date').textContent = `${fmtDay(w.start)} – ${fmtDay(w.end)}`;
-      const weekOt = w.days.reduce((n, d) => n + overtimeOf(d.shifts), 0);
+      // Overtime is per day — eight hours is a daily line, not a weekly one.
+      const weekOt = w.days.reduce((n, d) => n + overtimeOf(d.shifts, d.date), 0);
       const weekPts = w.days.reduce((n, d) => n + d.activity.points, 0);
-      $('day-total').innerHTML = totalLine(w.minutes, weekOt, 'clocked this week', weekPts);
+      $('day-total').innerHTML = totalLine(w.minutes, 'clocked this week', weekPts);
+      $('day-split').innerHTML = splitLine(
+        w.days.flatMap(d => d.shifts.map(s => ({ ...s, _date: d.date }))),
+        null, weekOt);
       myDays = w.days;
       renderCalendar($('day-cal'), w.days.map(d => ({
         key: d.date, label: fmtDay(d.date).split(' ')[0], sub: d.date.slice(5).replace('-', '/'),
@@ -376,9 +409,8 @@ async function loadDay() {
   }
 }
 
-const totalLine = (minutes, ot, label, points) =>
+const totalLine = (minutes, label, points) =>
   (minutes ? `${fmtMinutes(minutes)} ${label}` : 'No ServiceTitan clock-in') +
-  (ot > 0 ? ` <span class="ot-tag">${fmtMinutes(ot)} overtime</span>` : '') +
   (points ? ` <span class="pts-tag">${fmtPoints(points)} points</span>` : '');
 
 // The hour-by-hour list under the calendar: what the tracker saw, and the note.
@@ -414,7 +446,7 @@ function renderWeekBreakdown(week, editable) {
   const d = week.days.find(x => x.date === weekDay);
   const covered = coveredHours(d.shifts, d.date);
   const rows = d.activity.hours.filter(h => covered.has(h.hour) || h.total > 0 || notesInHour(d.notes, h.hour).length);
-  const ot = overtimeOf(d.shifts);
+  const ot = overtimeOf(d.shifts, d.date);
 
   $('day-hours').innerHTML = `
     <div class="dayhead">
@@ -432,7 +464,7 @@ function renderWeekBreakdown(week, editable) {
 function renderWeekSummary(week) {
   const totals = {};
   METRIC_ORDER.forEach(k => { totals[k] = week.days.reduce((n, d) => n + (d.activity.totals[k] || 0), 0); });
-  const ot = week.days.reduce((n, d) => n + overtimeOf(d.shifts), 0);
+  const ot = week.days.reduce((n, d) => n + overtimeOf(d.shifts, d.date), 0);
   const pts = week.days.reduce((n, d) => n + d.activity.points, 0);
   const worked = week.days.filter(d => d.minutes).length;
 
@@ -445,7 +477,7 @@ function renderWeekSummary(week) {
     <div class="chips">${chipsOf(totals)}</div>
     <table class="sumtable">
       <tbody>${week.days.map(d => {
-        const dot = overtimeOf(d.shifts);
+        const dot = overtimeOf(d.shifts, d.date);
         return `<tr${d.date === weekDay ? ' class="on"' : ''}>
                   <td>${fmtDay(d.date)}</td>
                   <td class="n">${d.minutes ? fmtMinutes(d.minutes) : '—'}</td>
@@ -747,7 +779,7 @@ async function loadTeam() {
     // that says who was off.
     $('team-list').innerHTML = data.people.length
       ? data.people.map(p => {
-          const ot = overtimeOf(p.shifts);
+          const ot = overtimeOf(p.shifts, data.date);
           const acts = Object.values(p.activity).reduce((a, b) => a + b, 0);
           return `
             <button class="person" data-person="${escapeHtml(p.person)}">
