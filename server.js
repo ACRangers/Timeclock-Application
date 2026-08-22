@@ -112,11 +112,13 @@ async function initDB() {
     `);
     // The shared manager account ships with its PIN already set, so nobody claims
     // it by being first. DO NOTHING, so changing it later is not undone on restart.
-    await pool.query(
-      `INSERT INTO time_users (username, person_name, pin_hash, is_manager)
-       VALUES ($1, $2, $3, TRUE) ON CONFLICT (username) DO NOTHING`,
-      [MANAGER_ONLY, USERNAME_TO_NAME[MANAGER_ONLY], await bcrypt.hash('2026', 10)]
-    );
+    for (const u of MANAGER_ONLY) {
+      await pool.query(
+        `INSERT INTO time_users (username, person_name, pin_hash, is_manager)
+         VALUES ($1, $2, $3, TRUE) ON CONFLICT (username) DO NOTHING`,
+        [u, USERNAME_TO_NAME[u], await bcrypt.hash('2026', 10)]
+      );
+    }
     console.log('DB: time_users, time_st_shifts, time_notes, time_sync_state, time_audit_log ready');
   } catch (e) {
     console.error('DB init error:', e.message);
@@ -174,12 +176,14 @@ const USERNAME_TO_NAME = {
   'acabrielle':         'Abrielle Uyehara',
   'acluis':             'Luis Angel Orozco',
   'aceric':             'Eric Robinson',
-  // A shared sign-in that only ever sees the team views. It matches nobody in
-  // ServiceTitan or the tracker, so it has no hours of its own and no My Calendar.
-  'ACRManager':         'Manager'
+  // Sign-ins that only ever see the team views. They match nobody in ServiceTitan
+  // or the tracker, so they have no hours of their own and no My Calendar.
+  'ACRManager':         'Manager',
+  'ACRStuart':          'Stuart',
+  'ACRBradley':         'Bradley'
 };
 
-const MANAGER_ONLY = 'ACRManager';
+const MANAGER_ONLY = new Set(['ACRManager', 'ACRStuart', 'ACRBradley']);
 
 // Loose name compare: ST names may differ from login names (e.g. "Ryan Santos" vs "Ryan Clayton Santos")
 function namesMatch(a, b) {
@@ -192,7 +196,7 @@ function namesMatch(a, b) {
 
 // Manager access is re-applied from here on every sign-in, so this list stays the
 // single place it is decided.
-const MANAGERS = new Set(['johnacr', MANAGER_ONLY]);
+const MANAGERS = new Set(['johnacr', ...MANAGER_ONLY]);
 
 function resolveUsername(input) {
   const raw = (input || '').trim();
@@ -316,7 +320,7 @@ app.get('/api/me', requireAuth, async (req, res) => {
   res.json({
     ...req.user,
     isManager: !!rows[0]?.is_manager,
-    managerOnly: req.user.username === MANAGER_ONLY
+    managerOnly: MANAGER_ONLY.has(req.user.username)
   });
 });
 
@@ -971,8 +975,8 @@ app.post('/api/manager/reset-pin', requireAuth, requireManager, async (req, res)
   if (!username) return res.status(404).json({ error: 'Unknown person' });
 
   // The shared manager account would be claimable by anyone until the next restart.
-  if (username === MANAGER_ONLY) {
-    return res.status(403).json({ error: 'The shared manager PIN cannot be reset here' });
+  if (MANAGER_ONLY.has(username)) {
+    return res.status(403).json({ error: 'A shared manager PIN cannot be reset here' });
   }
 
   try {
