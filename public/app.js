@@ -737,7 +737,7 @@ async function renderSyncBanner() {
     if (s.last_error) {
       // Name the operation ServiceTitan actually refused. Saying "the timesheet
       // permission" sent someone checking scopes that were already granted.
-      const op = /access 'GET [^']*/([a-z-]+)'/i.exec(s.last_error);
+      const op = /access 'GET [^']*\/([a-z-]+)'/i.exec(s.last_error);
       $('team-banner').textContent = /403|scope/i.test(s.last_error)
         ? `ServiceTitan hours are not syncing: the API app is not allowed to read ${
             op ? op[1].replace(/-/g, ' ') : 'one of the endpoints it needs'
