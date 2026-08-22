@@ -26,7 +26,12 @@ if (process.env.DATABASE_URL) {
   const isInternal = process.env.DATABASE_URL.includes('railway.internal');
   pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: isInternal ? false : { rejectUnauthorized: false }
+    ssl: isInternal ? false : { rejectUnauthorized: false },
+    // A week view is ~35 queries, so a dozen people opening one at once queues
+    // badly on the default of 10. The tracker shares this database, so this is
+    // raised, not removed.
+    max: 24,
+    idleTimeoutMillis: 30000
   });
   pool.on('error', err => console.error('DB pool error:', err.message));
 }
@@ -196,7 +201,7 @@ function namesMatch(a, b) {
 
 // Manager access is re-applied from here on every sign-in, so this list stays the
 // single place it is decided.
-const MANAGERS = new Set(['johnacr', ...MANAGER_ONLY]);
+const MANAGERS = new Set(['johnacr', 'ackenia', ...MANAGER_ONLY]);
 
 function resolveUsername(input) {
   const raw = (input || '').trim();
