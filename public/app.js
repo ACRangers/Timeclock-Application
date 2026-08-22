@@ -735,8 +735,13 @@ async function renderSyncBanner() {
     }
     $('team-resync').hidden = false;
     if (s.last_error) {
+      // Name the operation ServiceTitan actually refused. Saying "the timesheet
+      // permission" sent someone checking scopes that were already granted.
+      const op = /access 'GET [^']*/([a-z-]+)'/i.exec(s.last_error);
       $('team-banner').textContent = /403|scope/i.test(s.last_error)
-        ? 'ServiceTitan hours are not syncing: the API app is missing the timesheet permission. Activity below is still accurate; clocked hours will read zero until that is granted.'
+        ? `ServiceTitan hours are not syncing: the API app is not allowed to read ${
+            op ? op[1].replace(/-/g, ' ') : 'one of the endpoints it needs'
+          }. Activity below is still accurate; clocked hours will read zero until that scope is granted and the app re-approved in ServiceTitan.`
         : `ServiceTitan hours are not syncing: ${s.last_error}`;
     } else if (stale) {
       const mins = Math.round((Date.now() - new Date(s.last_run_at).getTime()) / 60000);
