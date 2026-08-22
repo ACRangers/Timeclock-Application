@@ -163,10 +163,13 @@ const EVENT_LABELS = {
   warranty:       'Warranty'
 };
 
-function fmtDur(hms) {
+function durSecs(hms) {
   const m = /^(\d+):(\d+):(\d+)/.exec(hms || '');
-  if (!m) return '';
-  const secs = +m[1] * 3600 + +m[2] * 60 + +m[3];
+  return m ? (+m[1] * 3600 + +m[2] * 60 + +m[3]) : 0;
+}
+
+function fmtDur(hms) {
+  const secs = durSecs(hms);
   if (!secs) return '';
   return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 }
@@ -359,6 +362,7 @@ async function loadDay() {
   $('day-next').disabled = dayDate >= azTodayStr();
   $('day-cal').innerHTML = '<p class="empty">Loading…</p>';
   $('day-hours').innerHTML = '';
+  $('day-totals').innerHTML = '';
   $('day-stamp').textContent = '';
   document.querySelectorAll('#day .seg button').forEach(b => {
     b.classList.toggle('active', b.id === `mine-${mineMode}`);
@@ -420,6 +424,32 @@ function renderBreakdown(day, editable) {
   $('day-hours').innerHTML = rows.length
     ? rows.map(h => hourRow(h, covered.has(h.hour), notesInHour(day.notes, h.hour), day.date, editable)).join('')
     : '<p class="empty">Nothing recorded for this day.</p>';
+  $('day-totals').innerHTML = dayTotals(day, covered);
+}
+
+// One line per activity type, calls carrying their combined duration alongside the
+// count — everything else has no duration to show. Sits under the hour list as the
+// day's running total, not another way to read the same hours.
+function dayTotals(day, covered) {
+  const events = day.activity.hours.flatMap(h => h.details || []);
+  const durOf = kind => events.filter(e => e.kind === kind).reduce((n, e) => n + durSecs(e.dur), 0);
+  const totals = day.activity.totals;
+  const blank = day.activity.hours.filter(h => covered.has(h.hour) && h.total === 0).length;
+
+  const rows = METRIC_ORDER.filter(k => totals[k] > 0).map(k => {
+    const dur = (k === 'callsIn' || k === 'callsOut') ? durOf(k) : 0;
+    return `<tr>
+              <td>${METRIC_LABELS[k]}</td>
+              <td class="n">${totals[k]}</td>
+              <td class="n">${dur ? fmtMinutes(Math.round(dur / 60)) : ''}</td>
+            </tr>`;
+  }).join('');
+
+  return `
+    <h4>Day totals</h4>
+    ${rows ? `<table class="sumtable"><tbody>${rows}</tbody></table>`
+           : '<p class="empty">No tracked activity today.</p>'}
+    ${blank ? `<p class="tot-blank">${blank} clocked-in hour${blank === 1 ? '' : 's'} with nothing logged — add what you did.</p>` : ''}`;
 }
 
 const chipsOf = metrics => Object.entries(metrics || {})
@@ -776,9 +806,13 @@ async function loadTeam() {
   $('team-next').disabled = teamDate >= azTodayStr();
 
   try {
-    const data = await api(`/api/manager/day?date=${teamDate}`);
+    const [data, week] = await Promise.all([
+      api(`/api/manager/day?date=${teamDate}`),
+      api(`/api/manager/team-week?start=${teamDate}`)
+    ]);
     $('team-range').textContent = teamDate === azTodayStr() ? 'Today' : fmtDay(teamDate);
     teamDay = data;
+    const weekByPerson = new Map(week.people.map(w => [w.person, w]));
 
     // Zero activity for everyone is either a very quiet day or a missing feed, and
     // only one of those is worth acting on.
@@ -796,18 +830,22 @@ async function loadTeam() {
       ? data.people.map(p => {
           const ot = overtimeOf(p.shifts, data.date);
           const acts = Object.values(p.activity).reduce((a, b) => a + b, 0);
+          const w = weekByPerson.get(p.person);
           return `
-            <button class="person" data-person="${escapeHtml(p.person)}">
-              <span class="nm">${escapeHtml(p.person)}${p.role ? `<i>${escapeHtml(p.role)}</i>` : ''}</span>
-              <span class="hrs">
-                ${p.minutes ? fmtMinutes(p.minutes) : '<em>off</em>'}
-                ${ot > 0 ? `<b class="ot-tag">+${fmtMinutes(ot)} OT</b>` : ''}
-                ${p.openShift ? '<b class="warn" title="No clock-out">•</b>' : ''}
-              </span>
-              <span class="act" title="${acts} tracked actions">${acts || ''}</span>
-              <span class="pts">${p.points ? `${fmtPoints(p.points)}<i>pts</i>` : ''}</span>
-              <span class="chev">›</span>
-            </button>`;
+            <details class="person">
+              <summary>
+                <span class="nm">${escapeHtml(p.person)}${p.role ? `<i>${escapeHtml(p.role)}</i>` : ''}</span>
+                <span class="hrs">
+                  ${p.minutes ? fmtMinutes(p.minutes) : '<em>off</em>'}
+                  ${ot > 0 ? `<b class="ot-tag">+${fmtMinutes(ot)} OT</b>` : ''}
+                  ${p.openShift ? '<b class="warn" title="No clock-out">•</b>' : ''}
+                </span>
+                <span class="act" title="${acts} tracked actions">${acts || ''}</span>
+                <span class="pts">${p.points ? `${fmtPoints(p.points)}<i>pts</i>` : ''}</span>
+                <button class="open-cal" data-person="${escapeHtml(p.person)}" title="Open calendar">›</button>
+              </summary>
+              ${w ? weekSummaryBody(w, data.date) : ''}
+            </details>`;
         }).join('')
       : '<p class="empty">Nobody clocked in on this day.</p>';
 
@@ -815,6 +853,36 @@ async function loadTeam() {
   } catch (e) {
     $('team-list').innerHTML = `<p class="empty">${escapeHtml(e.message)}</p>`;
   }
+}
+
+// The same shape as My Calendar's Week summary dropdown, reused per person on the
+// team list — folded away until a manager wants more than the day row shows.
+function weekSummaryBody(w, onDate) {
+  const totals = {};
+  METRIC_ORDER.forEach(k => { totals[k] = w.days.reduce((n, d) => n + (d.totals[k] || 0), 0); });
+  const ot = w.days.reduce((n, d) => n + overtimeOf(d.shifts, d.date), 0);
+  const worked = w.days.filter(d => d.minutes).length;
+
+  return `
+    <div class="person-week">
+      <div class="sumline">
+        <b>${fmtMinutes(w.minutes)}</b> this week over ${worked} day${worked === 1 ? '' : 's'}
+        ${ot > 0 ? `<span class="ot-tag">${fmtMinutes(ot)} overtime</span>` : ''}
+        ${w.points ? `<span class="pts-tag">${fmtPoints(w.points)} points</span>` : ''}
+      </div>
+      <div class="chips">${chipsOf(totals)}</div>
+      <table class="sumtable">
+        <tbody>${w.days.map(d => {
+          const dot = overtimeOf(d.shifts, d.date);
+          return `<tr${d.date === onDate ? ' class="on"' : ''}>
+                    <td>${fmtDay(d.date)}</td>
+                    <td class="n">${d.minutes ? fmtMinutes(d.minutes) : '—'}</td>
+                    <td class="n">${dot > 0 ? `<b class="ot-tag">${fmtMinutes(dot)}</b>` : ''}</td>
+                    <td class="n">${d.points ? fmtPoints(d.points) : ''}</td>
+                  </tr>`;
+        }).join('')}</tbody>
+      </table>
+    </div>`;
 }
 
 // Tapping a person opens their calendar; the tab bar and back button return here.
@@ -912,8 +980,10 @@ $('team-next').addEventListener('click', () => {
   loadTeam();
 });
 $('team-list').addEventListener('click', e => {
-  const row = e.target.closest('.person');
-  if (row) openPerson(row.dataset.person);
+  const open = e.target.closest('.open-cal');
+  if (!open) return;
+  e.preventDefault(); // stop the <details> from also toggling
+  openPerson(open.dataset.person);
 });
 $('day-back').addEventListener('click', () => { viewing = null; showView('team'); });
 

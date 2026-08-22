@@ -967,6 +967,32 @@ app.get('/api/manager/day', requireAuth, requireManager, async (req, res) => {
   }
 });
 
+// Every team member's week, batched the same way personWeek() batches one — 7
+// dayBundle calls total, not 7 per person, since dayBundle is keyed by date and
+// sliced per person in memory.
+app.get('/api/manager/team-week', requireAuth, requireManager, async (req, res) => {
+  const dates = weekDates(req.query.start || azToday());
+  try {
+    const bundles = await Promise.all(dates.map(dayBundle));
+    const people = teamFor(req.user.name).map(name => {
+      const days = bundles.map(b => personOn(b, name));
+      return {
+        person: name,
+        minutes: days.reduce((n, d) => n + d.minutes, 0),
+        points: days.reduce((n, d) => n + d.activity.points, 0),
+        days: days.map(d => ({
+          date: d.date, minutes: d.minutes, shifts: d.shifts,
+          totals: d.activity.totals, points: d.activity.points
+        }))
+      };
+    });
+    res.json({ start: dates[0], end: dates[6], dates, people });
+  } catch (e) {
+    console.error('[MGR TEAM WEEK]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Weeks start Sunday (John, 2026-08-12).
 function weekDates(start) {
   const d = new Date(`${start}T12:00:00Z`);
