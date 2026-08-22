@@ -518,6 +518,13 @@ async function stGet(endpoint, attempt = 0) {
       await new Promise(r => setTimeout(r, (secs + 1) * 1000));
       return stGet(endpoint, attempt + 1);
     }
+    // A token carries the scopes it was issued with, so granting a new one changes
+    // nothing until the cached token expires — up to an hour of a 403 that looks
+    // like the grant did not work. Throw the token away and ask for a fresh one.
+    if (e.response?.status === 403 && attempt === 0) {
+      stToken = { token: null, expiresAt: 0 };
+      return stGet(endpoint, attempt + 1);
+    }
     throw e;
   }
 }
